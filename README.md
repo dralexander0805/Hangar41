@@ -1,25 +1,25 @@
-# XPlane2Blender — with Round-Trip OBJ Importer
+# Hangar41
 
-A fork of the official [XPlane2Blender](https://github.com/X-Plane/XPlane2Blender) addon, updated for **Blender 4.1** and extended with a fully working **OBJ importer** for round-trip cockpit editing.
+**The first working OBJ importer for X-Plane — import any cockpit directly into Blender 4.1, edit it, and export it back to X-Plane.**
 
-> **The original addon has no import feature.** This fork adds one — import any X-Plane cockpit `.obj` file directly into Blender, edit it, and export it back. Tested on real-world aircraft including the B737 and B747 cockpits.
+Until now, there was no way to bring an existing X-Plane `.obj` file back into Blender for editing. You had to keep the original `.blend` file or start from scratch. Hangar41 changes that.
 
 ---
 
-## What's New in This Fork
+## What It Does
 
 ### OBJ Importer
-- Import X-Plane `.obj` files directly into Blender 4.1
-- All animations preserved: `ANIM_trans`, `ANIM_rotate`, show/hide
-- `drag_rotate` manipulators with detent ranges (flap handles, speedbrakes, etc.)
-- Full round-trip: import → edit → export → identical behavior in X-Plane
+- Import any X-Plane `.obj` file directly into Blender 4.1
+- Full animation hierarchy reconstructed — `ANIM_trans`, `ANIM_rotate`, show/hide
+- `drag_rotate` manipulators with detent ranges (flap handles, speedbrakes, gear levers)
+- Complete round-trip: import → edit → export → works identically in X-Plane
 
 ### Exporter Bug Fixes
-- **`drag_rotate` v2_max wrong**: Exporter was using the physical lift distance as `v2_max` instead of the dataref's actual maximum value. Caused flap handles and speedbrakes to be non-functional after round-trip.
-- **Detent range validator too strict**: Four validator checks blocked export of valid Plane Maker–generated OBJs. Downgraded from errors to warnings.
+- **`drag_rotate` v2_max**: Fixed a bug where the physical lift distance was used as `v2_max` instead of the dataref's actual maximum value — causing flap handles and speedbrakes to break on export
+- **Detent range validator**: Fixed overly strict validation that blocked export of valid Plane Maker–generated OBJs
 
 ### Blender 4.1 Compatibility
-All Blender 4.x API breaks from the original 4.2.0-alpha codebase have been fixed:
+All Blender 4.x API breaks have been fixed:
 
 | Issue | Fix |
 |-------|-----|
@@ -63,7 +63,7 @@ Select your cockpit `.obj` file. The importer will:
 ### Exporting
 **File → Export → X-Plane Object (.obj)**
 
-Standard XPlane2Blender export — unchanged from the original workflow.
+Same export workflow you already know.
 
 ---
 
@@ -83,8 +83,6 @@ All animation directive counts (TRIS, ANIM_trans, ANIM_rotate_begin, show/hide) 
 
 ---
 
-## Upstream
+## License
 
-This is a fork of [X-Plane/XPlane2Blender](https://github.com/X-Plane/XPlane2Blender) at version 4.2.0-alpha.1. The original addon is maintained by Laminar Research. Bug fixes in this fork that apply to the original have been submitted upstream as PRs.
-
-Original license: see [LICENSE](LICENSE).
+See [LICENSE](LICENSE).

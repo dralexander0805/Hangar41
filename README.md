@@ -1,8 +1,15 @@
 # Hangar41
 
+![Beta](https://img.shields.io/badge/status-beta-orange)
+![Blender](https://img.shields.io/badge/Blender-4.1-blue?logo=blender)
+![X-Plane](https://img.shields.io/badge/X--Plane-12-darkblue)
+![License](https://img.shields.io/badge/license-GPL--3.0-green)
+
 **The first working OBJ importer for X-Plane — import any cockpit directly into Blender 4.1, edit it, and export it back to X-Plane.**
 
 Until now, there was no way to bring an existing X-Plane `.obj` file back into Blender for editing. You had to keep the original `.blend` file or start from scratch. Hangar41 changes that.
+
+> ⚠️ **This is a beta release.** Core round-trip functionality is working but edge cases may exist. Please open an issue if you find one.
 
 ---
 
@@ -61,9 +68,10 @@ Select your cockpit `.obj` file. The importer will:
 - Preserve all material and UV data
 
 ### Exporting
-**File → Export → X-Plane Object (.obj)**
-
-Same export workflow you already know.
+1. Open the **Scene Properties** panel (camera icon in the Properties sidebar)
+2. Scroll to the **X-Plane** section
+3. Set the **X-Plane version** (12.1.x), **collection type** (e.g. Aircraft Part), and **texture paths**
+4. Click **Export OBJs**
 
 ---
 
@@ -85,4 +93,4 @@ All animation directive counts (TRIS, ANIM_trans, ANIM_rotate_begin, show/hide) 
 
 ## License
 
-See [LICENSE](LICENSE).
+[GPL-3.0](LICENSE)

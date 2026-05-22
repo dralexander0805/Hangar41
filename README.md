@@ -68,7 +68,7 @@ Select your cockpit `.obj` file. The importer will:
 - Preserve all material and UV data
 
 ### Exporting
-1. Open the **Scene Properties** panel (camera icon in the Properties sidebar)
+1. Open the **Scene Properties** panel 
 2. Scroll to the **X-Plane** section
 3. Set the **X-Plane version** (12.1.x), **collection type** (e.g. Aircraft Part), and **texture paths**
 4. Click **Export OBJs**

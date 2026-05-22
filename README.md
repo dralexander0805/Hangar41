@@ -5,45 +5,27 @@
 ![X-Plane](https://img.shields.io/badge/X--Plane-12-darkblue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green)
 
-**The first working OBJ importer for X-Plane — import any cockpit directly into Blender 4.1, edit it, and export it back to X-Plane.**
+**Import any X-Plane cockpit into Blender 4.1, edit it, and export it back — fully working round-trip.**
 
-Until now, there was no way to bring an existing X-Plane `.obj` file back into Blender for editing. You had to keep the original `.blend` file or start from scratch. Hangar41 changes that.
+Until now there was no way to bring an existing X-Plane `.obj` file back into Blender for editing. You had to keep the original `.blend` or start from scratch. Hangar41 changes that.
 
-> ⚠️ **This is a beta release.** Core round-trip functionality is working but edge cases may exist. Please open an issue if you find one.
+> ⚠️ **Beta** — core functionality is solid but edge cases may exist. Open an issue if you find one.
 
 ---
 
-## What It Does
+## Features
 
-### OBJ Importer
-- Import any X-Plane `.obj` file directly into Blender 4.1
-- Full animation hierarchy reconstructed — `ANIM_trans`, `ANIM_rotate`, show/hide
-- `drag_rotate` manipulators with detent ranges (flap handles, speedbrakes, gear levers)
-- Complete round-trip: import → edit → export → works identically in X-Plane
-
-### Exporter Bug Fixes
-- **`drag_rotate` v2_max**: Fixed a bug where the physical lift distance was used as `v2_max` instead of the dataref's actual maximum value — causing flap handles and speedbrakes to break on export
-- **Detent range validator**: Fixed overly strict validation that blocked export of valid Plane Maker–generated OBJs
-
-### Blender 4.1 Compatibility
-All Blender 4.x API breaks have been fixed:
-
-| Issue | Fix |
-|-------|-----|
-| `AxisAngle` type removed | Defined locally |
-| `is_vector_axis_aligned` removed | Defined locally |
-| `vertex.normal` read-only | Removed assignment |
-| `calc_normals()` removed | Use `me.update(calc_edges=True)` |
-| `bpy.ops` context dict syntax removed | Use `bpy.context.temp_override()` |
-| `KeyframeInfo.dataref_loop` removed | Removed parameter |
-| `create_datablock_mesh(mesh_src=)` removed | Direct `bpy.data.objects.new()` |
+- **OBJ Importer** — bring any X-Plane `.obj` directly into Blender
+- Full animation support — translations, rotations, show/hide, manipulators
+- Detent manipulators work correctly (flap handles, speedbrakes, gear levers)
+- Blender 4.1 compatible
 
 ---
 
 ## Requirements
 
-- **Blender 4.1**
-- **X-Plane 12** (OBJ8 format)
+- Blender 4.1
+- X-Plane 12
 
 ---
 
@@ -59,35 +41,14 @@ All Blender 4.x API breaks have been fixed:
 
 ## Usage
 
-### Importing an OBJ
+### Import
 **File → Import → X-Plane Object (.obj)**
 
-Select your cockpit `.obj` file. The importer will:
-- Reconstruct the full animation hierarchy as Blender EMPTYs and MESHes
-- Assign manipulators, show/hide animations, and datarefs
-- Preserve all material and UV data
-
-### Exporting
-1. Open the **Scene Properties** panel 
+### Export
+1. Open the **Scene Properties** panel
 2. Scroll to the **X-Plane** section
-3. Set the **X-Plane version** (12.1.x), **collection type** (e.g. Aircraft Part), and **texture paths**
+3. Set your X-Plane version, collection type, and texture paths
 4. Click **Export OBJs**
-
----
-
-## Round-Trip Notes
-
-The exported OBJ is structurally equivalent to the original but not byte-identical:
-
-| Change | Reason | X-Plane behavior |
-|--------|--------|-----------------|
-| More VTs | Blender doesn't share vertices across UV seams | Identical geometry |
-| Old single-line `ANIM_rotate` → `ANIM_rotate_begin/key/end` | Modern OBJ8 format | Identical animation |
-| Forward-backward pivot pattern simplified | Mesh VTs stored in pivot-local space | Identical rotation |
-| Extra `ATTR_manip_none` between objects | Defensive state reset | Identical manipulators |
-| A few extra `ANIM_begin` nesting levels | ob_static/ob_dynamic split | Harmless in X-Plane |
-
-All animation directive counts (TRIS, ANIM_trans, ANIM_rotate_begin, show/hide) match exactly.
 
 ---
 

@@ -66,7 +66,7 @@ In Blender, imports are textured in the viewport and named after what they do: `
 Hangar41 needs **Blender 4.1** and reads objects from **X-Plane 11 and 12**.
 
 1. **Disable XPlane2Blender** if you have it. Hangar41 is built on it and shares its add-on name and settings, so only one can be enabled at a time.
-2. Download this repository and zip the `io_xplane2blender` folder.
+2. Download the latest `Hangar41-….zip` from [**Releases**](https://github.com/dralexander0805/Hangar41/releases). There's no need to unzip it.
 3. In Blender, open **Edit → Preferences → Add-ons → Install**, pick the zip, and enable
    **Import-Export: Hangar41: X-Plane .obj Import/Export**.
 

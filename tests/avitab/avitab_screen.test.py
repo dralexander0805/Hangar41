@@ -106,4 +106,68 @@ class TestAviTabScreen(XPlaneTestCase):
         self.assertEqual(cockpit.count("avitab/brightness"), 1)
 
 
+    def test_panel_size_found_and_screens_refit(self) -> None:
+        # The C172's panel is 1024 x 1024; screens made for 2048 showed a quarter
+        bpy.ops.wm.read_homefile(use_empty=True)
+        aircraft = Path(tempfile.mkdtemp())
+        (aircraft / "objects").mkdir()
+        (aircraft / "objects" / "cockpit.png").write_bytes(b"")
+        panels = aircraft / "cockpit_3d" / "-PANELS-"
+        panels.mkdir(parents=True)
+        # PNG signature and IHDR: width, height
+        (panels / "Panel.png").write_bytes(
+            b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + (1024).to_bytes(4, "big") * 2
+        )
+        (aircraft / "objects" / "cockpit.obj").write_text(
+            COCKPIT.replace("GLOBAL_cockpit_lit\n", "GLOBAL_cockpit_lit\nTEXTURE cockpit.png\n")
+        )
+        bpy.ops.import_scene.xplane_obj(filepath=str(aircraft / "objects" / "cockpit.obj"))
+        layer_coll = bpy.context.view_layer.layer_collection.children["cockpit"]
+        bpy.context.view_layer.active_layer_collection = layer_coll
+
+        from io_xplane2blender.xplane_avitab import find_panel_size
+
+        self.assertEqual(find_panel_size()[0], (1024, 1024))
+        # Without a size given, it uses the one it finds
+        self.assertEqual(bpy.ops.object.add_xplane_avitab_screen(), {"FINISHED"})
+        found = bpy.context.active_object
+        self.assertAlmostEqual(max(l.uv.x for l in found.data.uv_layers.active.data), 800 / 1024)
+
+        # A screen made for 2048, duplicated and joined, and joined with a
+        # face that isn't a screen: Refit fixes only the screen faces
+        self.assertEqual(
+            bpy.ops.object.add_xplane_avitab_screen(panel_width=2048, panel_height=2048, add_tablet=False),
+            {"FINISHED"},
+        )
+        screen = bpy.context.active_object
+        bpy.ops.object.duplicate()
+        copy = bpy.context.active_object
+        copy.location.x += 0.5
+        other = bpy.data.objects.new("other", bpy.data.meshes["Mesh"].copy())
+        layer_coll.collection.objects.link(other)
+        other_uvs = [tuple(l.uv) for l in other.data.uv_layers.active.data]
+        for ob in bpy.context.scene.objects:
+            ob.select_set(ob in (screen, copy, other))
+        bpy.context.view_layer.objects.active = screen
+        bpy.ops.object.join()
+
+        self.assertEqual(
+            bpy.ops.object.xplane_avitab_refit(panel_width=1024, panel_height=1024), {"FINISHED"}
+        )
+        uv = screen.data.uv_layers.active.data
+        screen_uvs, rest = [], []
+        for poly in screen.data.polygons:
+            is_screen = screen.material_slots[poly.material_index].material.xplane.cockpit_feature == "panel"
+            (screen_uvs if is_screen else rest).extend(tuple(uv[i].uv) for i in poly.loop_indices)
+        self.assertEqual(len(screen_uvs), 8)  # both copies
+        self.assertAlmostEqual(max(u for u, v in screen_uvs), 800 / 1024, places=5)
+        self.assertAlmostEqual(max(v for u, v in screen_uvs), 480 / 1024, places=5)
+        for got, want in zip(sorted(rest), sorted(other_uvs)):
+            self.assertAlmostEqual(got[0], want[0], places=5)
+            self.assertAlmostEqual(got[1], want[1], places=5)
+        # Running it again changes nothing
+        bpy.ops.object.xplane_avitab_refit(panel_width=1024, panel_height=1024)
+        self.assertAlmostEqual(max(l.uv.x for l in screen.data.uv_layers.active.data if l.uv.x < 0.9), 800 / 1024, places=5)
+
+
 runTestCases([TestAviTabScreen])

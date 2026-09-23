@@ -8,6 +8,9 @@ See AviTab's AircraftIntegration/readme.txt.
 
 import json
 import os
+import struct
+from pathlib import Path
+from typing import Optional, Tuple
 
 import bmesh
 import bpy
@@ -24,6 +27,47 @@ from io_xplane2blender.xplane_constants import (
 
 # Where the panel rectangle is kept on the screen object, for AviTab.json
 AVITAB_PROP = "xplane_avitab_panel"
+
+
+# Where aircraft keep the 3D panel texture, relative to the .acf
+PANEL_PNGS = ("cockpit_3d/-PANELS-/Panel.png", "cockpit/-PANELS-/Panel.png")
+
+
+def _png_size(path: Path) -> Optional[Tuple[int, int]]:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(24)
+    except OSError:
+        return None
+    if head[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    return struct.unpack(">II", head[16:24])
+
+
+def find_panel_size() -> Optional[Tuple[Tuple[int, int], Path]]:
+    """
+    The aircraft's panel texture size, found from the imported cockpit's
+    textures (usually in <aircraft>/objects) or from where the .blend is
+    """
+    starts = []
+    for coll in bpy.data.collections:
+        layer = coll.xplane.layer
+        for tex in (layer.texture, layer.texture_lit, layer.texture_normal):
+            if tex:
+                starts.append(Path(bpy.path.abspath(tex)).parent)
+    if bpy.data.filepath:
+        starts.append(Path(bpy.data.filepath).parent)
+    for start in starts:
+        for folder in [start, *list(start.parents)[:3]]:
+            for rel in PANEL_PNGS:
+                size = _png_size(folder / rel)
+                if size:
+                    return size, folder / rel
+    return None
+
+
+def _is_screen_material(mat) -> bool:
+    return mat is not None and mat.xplane.cockpit_feature == COCKPIT_FEATURE_PANEL
 
 
 def _exportable_collection(context):
@@ -150,6 +194,18 @@ class OBJECT_OT_add_xplane_avitab_screen(bpy.types.Operator):
             layout.label(text="The rectangle goes past the panel texture", icon="ERROR")
 
     def execute(self, context):
+        # Unless given, use the aircraft's panel texture size
+        if not (
+            self.properties.is_property_set("panel_width")
+            or self.properties.is_property_set("panel_height")
+        ):
+            found = find_panel_size()
+            if found:
+                (self.panel_width, self.panel_height), path = found
+                self.report(
+                    {"INFO"},
+                    f"Panel texture is {self.panel_width} x {self.panel_height} ({path})",
+                )
         if (
             self.left + self.width > self.panel_width
             or self.bottom + self.height > self.panel_height
@@ -223,6 +279,9 @@ class OBJECT_OT_add_xplane_avitab_screen(bpy.types.Operator):
             "bottom": self.bottom,
             "width": self.width,
             "height": self.height,
+            # What the UVs were made for, so Refit can correct them
+            "panel_width": self.panel_width,
+            "panel_height": self.panel_height,
         }
 
         for other in context.selected_objects:
@@ -286,6 +345,55 @@ class OBJECT_OT_add_xplane_avitab_screen(bpy.types.Operator):
         coll.objects.link(tablet)
         tablet.matrix_world = screen.matrix_world.copy()
         return tablet
+
+
+class OBJECT_OT_xplane_avitab_refit(bpy.types.Operator):
+    """Fit every AviTab screen's UVs to the panel texture's real size"""
+
+    bl_idname = "object.xplane_avitab_refit"
+    bl_label = "Refit AviTab Screens"
+    bl_options = {"REGISTER", "UNDO"}
+
+    panel_width: bpy.props.IntProperty(name="Panel Width", default=2048, min=1)
+    panel_height: bpy.props.IntProperty(name="Panel Height", default=2048, min=1)
+
+    def invoke(self, context, event):
+        found = find_panel_size()
+        if found:
+            (self.panel_width, self.panel_height), _ = found
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        done_meshes = set()
+        count = 0
+        for ob in context.scene.objects:
+            if AVITAB_PROP not in ob or ob.type != "MESH" or ob.data in done_meshes:
+                continue
+            done_meshes.add(ob.data)
+            rect = ob[AVITAB_PROP]
+            # Screens from before this was stored were made for the 2048 default
+            sx = rect.get("panel_width", 2048) / self.panel_width
+            sy = rect.get("panel_height", 2048) / self.panel_height
+            screen_slots = {
+                i
+                for i, slot in enumerate(ob.material_slots)
+                if _is_screen_material(slot.material)
+            }
+            uv = ob.data.uv_layers.active
+            for poly in ob.data.polygons:
+                # Joined with other geometry? Only the screen's faces
+                if poly.material_index in screen_slots:
+                    for li in poly.loop_indices:
+                        u, v = uv.data[li].uv
+                        uv.data[li].uv = (u * sx, v * sy)
+            rect["panel_width"] = self.panel_width
+            rect["panel_height"] = self.panel_height
+            count += 1
+        self.report(
+            {"INFO"},
+            f"Refit {count} AviTab screen(s) to {self.panel_width} x {self.panel_height}",
+        )
+        return {"FINISHED"}
 
 
 class EXPORT_OT_xplane_avitab_json(bpy.types.Operator, ExportHelper):
@@ -368,22 +476,32 @@ def menu_func_add(self, context):
     )
 
 
+def menu_func_object(self, context):
+    self.layout.operator(OBJECT_OT_xplane_avitab_refit.bl_idname)
+
+
 def menu_func_export(self, context):
     self.layout.operator(EXPORT_OT_xplane_avitab_json.bl_idname, text="AviTab.json (X-Plane)")
 
 
-_classes = (OBJECT_OT_add_xplane_avitab_screen, EXPORT_OT_xplane_avitab_json)
+_classes = (
+    OBJECT_OT_add_xplane_avitab_screen,
+    OBJECT_OT_xplane_avitab_refit,
+    EXPORT_OT_xplane_avitab_json,
+)
 
 
 def register():
     for cls in _classes:
         bpy.utils.register_class(cls)
     bpy.types.VIEW3D_MT_mesh_add.append(menu_func_add)
+    bpy.types.VIEW3D_MT_object.append(menu_func_object)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
 
 
 def unregister():
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export)
+    bpy.types.VIEW3D_MT_object.remove(menu_func_object)
     bpy.types.VIEW3D_MT_mesh_add.remove(menu_func_add)
     for cls in reversed(_classes):
         bpy.utils.unregister_class(cls)

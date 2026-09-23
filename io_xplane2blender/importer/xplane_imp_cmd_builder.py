@@ -55,6 +55,17 @@ class ParentInfo:
     parent_type: str = "OBJECT"
     parent_bone: Optional[str] = None
 from io_xplane2blender.xplane_constants import (
+    BLEND_OFF,
+    BLEND_ON,
+    EMPTY_USAGE_MAGNET,
+    LIGHT_CUSTOM,
+    LIGHT_NAMED,
+    LIGHT_PARAM,
+    MAX_COCKPIT_REGIONS,
+    MAX_LODS,
+    BLEND_SHADOW,
+    SURFACE_TYPE_CONCRETE,
+    SURFACE_TYPE_NONE,
     ANIM_TYPE_HIDE,
     ANIM_TYPE_SHOW,
     ANIM_TYPE_TRANSFORM,
@@ -98,6 +109,41 @@ from io_xplane2blender.xplane_helpers import (
     vec_b_to_x,
     vec_x_to_b,
 )
+
+# OBJ attribute state that becomes material settings (see IntermediateAttributes)
+ATTR_STATE_DIRECTIVES = frozenset(
+    {
+        "ATTR_draw_disable",
+        "ATTR_draw_enable",
+        "ATTR_cockpit",
+        "ATTR_cockpit_lit_only",
+        "ATTR_cockpit_region",
+        "ATTR_cockpit_device",
+        "ATTR_no_cockpit",
+        "ATTR_solid_camera",
+        "ATTR_no_solid_camera",
+        "ATTR_shiny_rat",
+        "ATTR_light_level",
+        "ATTR_light_level_reset",
+        "ATTR_blend",
+        "ATTR_no_blend",
+        "ATTR_shadow_blend",
+        "ATTR_shadow",
+        "ATTR_no_shadow",
+        "ATTR_hard",
+        "ATTR_hard_deck",
+        "ATTR_no_hard",
+        "ATTR_poly_os",
+        "ATTR_draped",
+        "ATTR_no_draped",
+        "ATTR_reset",
+    }
+)
+
+
+# Directives that place a light or magnet at a point in the current animation frame
+POINT_DIRECTIVES = frozenset({"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "MAGNET"})
+
 
 # is_vector_axis_aligned was removed from xplane_helpers in 4.3.x — define locally.
 def is_vector_axis_aligned(v) -> bool:
@@ -177,8 +223,10 @@ class IntermediateAnimation:
             """
             if rotation_mode == "AXIS_ANGLE":
                 axis, rotations = next(iter(self.rotations.items()))
-                # 4.3.x KeyframeInfo expects (angle, axis) tuple for AXIS_ANGLE
-                return (math.radians(rotations[keyframe_idx]), Vector(axis))
+                # KeyframeInfo turns any tuple into an Euler, so this must be an AxisAngle
+                return test_creation_helpers.AxisAngle(
+                    Vector(axis), math.radians(rotations[keyframe_idx])
+                )
             else:
 
                 def axis_to_label(axis):
@@ -206,7 +254,7 @@ class IntermediateAnimation:
                     # Remember, all axis are normalized, so we're okay
                     euler_components[axis_label] = axis[
                         r_axis.index(True)
-                    ] * degrees[keyframe_idx]
+                    ] * math.radians(degrees[keyframe_idx])
 
                 tot_rot = Euler(euler_components.values(), rotation_mode)
                 return tot_rot
@@ -220,6 +268,7 @@ class IntermediateAnimation:
                         idx=current_frame,
                         dataref_path=self.xp_dataref.path,
                         dataref_value=value,
+                        dataref_loop=self.xp_dataref.loop or None,
                         dataref_anim_type=self.xp_dataref.anim_type,
                         location=self.locations[value_idx] + bl_object.location
                         if self.locations
@@ -234,6 +283,7 @@ class IntermediateAnimation:
                         idx=current_frame,
                         dataref_path=self.xp_dataref.path,
                         dataref_value=value,
+                        dataref_loop=self.xp_dataref.loop or None,
                         dataref_anim_type=self.xp_dataref.anim_type,
                         location=None,
                         rotation=recompose_rotation(bl_object.rotation_mode, value_idx)
@@ -341,9 +391,20 @@ class IntermediateAttributes:
     cockpit_mode: str = COCKPIT_FEATURE_NONE
     cockpit_region: int = 0
     cockpit_device_args: Tuple[str, ...] = ()
+    # X-Plane 12 max luminance, the extra parameter of ATTR_cockpit*
+    cockpit_luminance: Optional[int] = None
     solid_camera: bool = False
     shiny_rat: Optional[float] = None
     has_explicit_shiny_rat: bool = False
+    # (v1, v2, dataref, brightness or None) from ATTR_light_level
+    light_level: Optional[Tuple[float, float, str, Optional[int]]] = None
+    blend: str = BLEND_ON
+    blend_ratio: float = 0.5
+    shadow: bool = True
+    surface: str = SURFACE_TYPE_NONE
+    deck: bool = False
+    poly_os: int = 0
+    draped: bool = False
 
     def material_key(self) -> Tuple[Any, ...]:
         return (
@@ -351,9 +412,18 @@ class IntermediateAttributes:
             self.cockpit_mode,
             self.cockpit_region,
             self.cockpit_device_args,
+            self.cockpit_luminance,
             self.solid_camera,
             self.shiny_rat,
             self.has_explicit_shiny_rat,
+            self.light_level,
+            self.blend,
+            self.blend_ratio,
+            self.shadow,
+            self.surface,
+            self.deck,
+            self.poly_os,
+            self.draped,
         )
 
 
@@ -380,63 +450,86 @@ class IntermediateDatablock:
     children: List["IntermediateDatablock"] = field(default_factory=list)
     manip: Optional["IntermediateManipulator"] = None
     attrs: Optional[IntermediateAttributes] = None
+    # For LIGHT and MAGNET blocks: the directive and its parsed fields
+    point: Optional[Tuple[str, Dict[str, Any]]] = None
+    # Index of the ATTR_LOD bucket the block was in, if the OBJ uses LODs
+    lod: Optional[int] = None
 
-    def build_mesh(self, vt_table: "VTTable") -> bpy.types.Mesh:
+    def build_mesh(
+        self,
+        vt_table: "VTTable",
+        resolve_parent: Callable[[Any], Optional[bpy.types.Object]],
+    ) -> bpy.types.Object:
         """
         Builds a mesh from the OBJ's VT Table, raises ValueError if
         an object with that mesh couldn't be built
         """
         mesh_idxes = vt_table.idxes[self.start_idx : self.start_idx + self.count]
+        vt_count = len(vt_table.vertices)
 
         vertex_map_old_to_new = {}
         vertices = []
-        for idx in mesh_idxes:
-            if idx not in vertex_map_old_to_new:
-                vertices.append(vt_table.vertices[idx])
-                vertex_map_old_to_new[idx] = len(vertices) - 1
+        py_faces: List[Tuple[int, int, int]] = []
+        used_vertex_sets = set()
+        self.skipped_faces = 0
+
+        def add_vertex(idx: int) -> int:
+            vertices.append(vt_table.vertices[idx])
+            return len(vertices) - 1
+
+        for i in range(0, len(mesh_idxes) - 2, 3):
+            tri = mesh_idxes[i : i + 3]
+            if len(set(tri)) < 3 or not all(0 <= idx < vt_count for idx in tri):
+                # Degenerate (repeated index) or out of range: X-Plane draws nothing
+                self.skipped_faces += 1
+                continue
+            vertex_set = frozenset(tri)
+            if vertex_set in used_vertex_sets:
+                # Same 3 vertices as an earlier face, e.g. a double-sided panel.
+                # Blender can't store two faces on one set of vertices, so this
+                # face gets its own copies (exported as extra VTs, same look).
+                face = [add_vertex(idx) for idx in tri]
             else:
-                pass
-        idxes = [vertex_map_old_to_new[idx] for idx in mesh_idxes]
+                used_vertex_sets.add(vertex_set)
+                face = []
+                for idx in tri:
+                    if idx not in vertex_map_old_to_new:
+                        vertex_map_old_to_new[idx] = add_vertex(idx)
+                    face.append(vertex_map_old_to_new[idx])
+            # We reverse the winding order to reverse the faces
+            py_faces.append(tuple(face[::-1]))
+
+        py_vertices = [(v.x, v.y, v.z) for v in vertices]
         normals = [(v.nx, v.ny, v.nz) for v in vertices]
         uvs = [Vector((v.s, v.t)) for v in vertices]
 
-        # Thanks senderle, https://stackoverflow.com/a/22045226
-        def chunk(it, size):
-            it = iter(it)
-            return iter(lambda: tuple(itertools.islice(it, size)), ())
-
-        py_vertices = [(v.x, v.y, v.z) for v in vertices]
-        py_faces: List[Tuple[int, int, int]] = [
-            # We reverse the winding order to reverse the faces
-            face[::-1]
-            for face in chunk(idxes, 3)
-        ]
-
         me = bpy.data.meshes.new(self.name)
         me.from_pydata(py_vertices, [], py_faces)
+        # Only repairs what from_pydata couldn't take; faces were cleaned above
+        me.validate(verbose=False)
 
-        if not me.validate(verbose=True):
+        if me.polygons:
             # Thanks Dave Prue and their "Import X-Plane Object" addon for the API example
             me.uv_layers.new()
 
             for mesh_uv_loop, mesh_loop in zip(me.uv_layers[-1].data, me.loops):
                 mesh_uv_loop.uv = uvs[mesh_loop.vertex_index]
 
-            # vertex.normal is read-only in Blender 4.x; normals are computed automatically
+            # Keep the OBJ's own normals so smoothing and hard edges survive a
+            # round trip. The exporter writes split normals for smooth faces.
+            me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
+            me.normals_split_custom_set_from_vertices(normals)
             me.update(calc_edges=True)
             # 4.3.x create_datablock_mesh no longer accepts a pre-built Mesh
             # object, so create the Blender object directly.
-            if self.datablock_info.parent_info is not None and isinstance(
-                self.datablock_info.parent_info.parent, str
-            ):
-                resolved = bpy.data.objects.get(self.datablock_info.parent_info.parent)
-                if resolved is not None:
-                    self.datablock_info.parent_info.parent = resolved
             ob = bpy.data.objects.new(self.name, object_data=me)
             test_creation_helpers.set_collection(ob, self.datablock_info.collection)
-            ob.name = self.datablock_info.name if self.datablock_info.name is not None else ob.name
-            if self.datablock_info.parent_info:
-                test_creation_helpers.set_parent(ob, self.datablock_info.parent_info)
+            parent_info = self.datablock_info.parent_info
+            if parent_info is not None:
+                parent_ob = resolve_parent(parent_info.parent)
+                if parent_ob is not None:
+                    ob.parent = parent_ob
+                    ob.parent_type = parent_info.parent_type
             if not ob.data.uv_layers:
                 ob.data.uv_layers.new()
 
@@ -445,7 +538,7 @@ class IntermediateDatablock:
             bpy.data.meshes.remove(me)
             logger.warn(
                 f"Skipped mesh '{self.name}' (TRIS {self.start_idx} {self.count}):"
-                " its triangles are invalid, e.g. degenerate or duplicate faces."
+                " none of its triangles are drawable (all degenerate or out of range)."
                 " The rest of the object was imported"
             )
             raise ValueError
@@ -552,16 +645,25 @@ class _AnimIntermediateStackEntry:
 
 class ImpCommandBuilder:
     def __init__(self, filepath: Path):
-        self.root_collection = test_creation_helpers.create_datablock_collection(
-            pathlib.Path(filepath).stem
-        )
+        # Always a new collection, so importing the same file twice doesn't
+        # merge the second copy into the first (Blender picks a unique name)
+        self.root_collection = bpy.data.collections.new(pathlib.Path(filepath).stem)
+        bpy.context.scene.collection.children.link(self.root_collection)
 
         self.root_collection.xplane.is_exportable_collection = True
         self.vt_table = VTTable([], [])
         self.texture: Optional[Path] = None
         self.texture_lit: Optional[Path] = None
         self.texture_normal: Optional[Path] = None
+        # The file Blender can display for TEXTURE, if one exists (may be the .dds)
+        self.texture_file: Optional[Path] = None
         self.is_cockpit: bool = False
+        self.normal_metalness = False
+        self.blend_glass = False
+        # (left, bottom, right, top) in pixels, from COCKPIT_REGION
+        self.cockpit_regions: List[Tuple[int, int, int, int]] = []
+        # Header lines with no exporter setting, written back verbatim
+        self.custom_header: List[Tuple[str, str]] = []
 
         # Although we don't end up making this, it is useful for tree problems
         self.root_intermediate_datablock = IntermediateDatablock(
@@ -590,6 +692,21 @@ class ImpCommandBuilder:
         self._pending_attrs: IntermediateAttributes = IntermediateAttributes()
         self._materials_by_attr_key: Dict[Tuple[Any, ...], bpy.types.Material] = {}
         self._cockpit_panel_mode: Optional[str] = None
+        self._skipped_faces = 0
+        self._meshes_with_skipped_faces = 0
+        # What ATTR_reset returns shininess to (GLOBAL_specular, if any)
+        self._header_shiny_rat: Optional[float] = None
+        # (near, far) per ATTR_LOD, and which one TRIS/lights are currently in
+        self._lods: List[Tuple[float, float]] = []
+        self._current_lod: Optional[int] = None
+
+        # Intermediate blocks refer to their parent by a key unique to this
+        # import. Blender renames objects whose name is taken (e.g. by an
+        # earlier import), so parents are found through this map, never by
+        # looking the name up in bpy.data.
+        self._used_keys: Set[str] = {"INTER_ROOT"}
+        self._hint_by_key: Dict[str, str] = {}
+        self._objects_by_key: Dict[str, bpy.types.Object] = {}
         # ---------------------------------------------------------------------
 
     def build_cmd(
@@ -610,7 +727,7 @@ class ImpCommandBuilder:
             empty = IntermediateDatablock(
                 datablock_info=DatablockInfo(
                     "EMPTY",
-                    name=name_hint or self._next_empty_name(),
+                    name=self._new_key(name_hint, "ImpEmpty"),
                     parent_info=ParentInfo(parent.datablock_info.name),
                     collection=self.root_collection,
                 ),
@@ -650,7 +767,7 @@ class ImpCommandBuilder:
             intermediate_datablock = IntermediateDatablock(
                 datablock_info=DatablockInfo(
                     datablock_type="MESH",
-                    name=name_hint or self._next_object_name(),
+                    name=self._new_key(name_hint, "ImpMesh"),
                     # How do we keep track of this
                     parent_info=ParentInfo(parent.datablock_info.name),
                     collection=self.root_collection,
@@ -663,6 +780,7 @@ class ImpCommandBuilder:
             )
             intermediate_datablock.manip = copy.deepcopy(self._pending_manip)
             intermediate_datablock.attrs = copy.deepcopy(self._pending_attrs)
+            intermediate_datablock.lod = self._current_lod
             self._blocks.append(intermediate_datablock)
             parent.children.append(intermediate_datablock)
 
@@ -752,18 +870,17 @@ class ImpCommandBuilder:
                 # print("trans, case B - as dynamic")
                 add_as_dynamic()
             elif r_xyz1 != r_xyz2 and r_v1 == r_v2:
-                # print("trans, case C - as odd dynamic")
-                add_as_dynamic()
-                # TODO: make warning
-                line = "bleh"
+                # Two positions but no dataref range to move between them, so
+                # it can only ever sit at the first; the exporter would refuse a
+                # dataref whose min equals its max, so keep it static
                 logger.warn(
-                    f"ANIM_trans"
-                    f"    {c for c in xyz1}"
-                    f"    {c for c in xyz2}"
-                    f"    {v1} {v2} {path}`"
-                    f"on line {line} has different locations but the same dataref values - it is malformed."
-                    f"Fix {self._anim_intermediate_stack[-1].intermediate_datablock}"
+                    f"ANIM_trans for '{path}' has two positions but the same dataref"
+                    f" value ({v1}) for both, so it can't move. Imported as a static"
+                    f" translation to the first position"
                 )
+                self._bake_matrix_stack[-1] = self._bake_matrix_stack[
+                    -1
+                ] @ Matrix.Translation(xyz1)
             elif r_xyz1 != r_xyz2 and r_v1 != r_v2:
                 # print("trans, case D - dynamic")
                 add_as_dynamic()
@@ -802,18 +919,15 @@ class ImpCommandBuilder:
                 # print("rot, case B - as dynamic")
                 add_as_dynamic()
             elif r_r1 != r_r2 and r_v1 == r_v2:
-                # print("rot, case C - as odd dynamic")
-                add_as_dynamic()
-                # TODO: make warning
-                line = "bleh"
+                # Same reasoning as ANIM_trans above
                 logger.warn(
-                    f"ANIM_rotate"
-                    f"    {Vector(c for c in dxyz)}"
-                    f"    {r1} {r2}"
-                    f"    {v1} {v2}"
-                    f"    {path}"
-                    f"\nnon line {line} has different rotation but the same dataref values - it is malformed."
-                    f"Fix {self._anim_intermediate_stack[-1].intermediate_datablock}"
+                    f"ANIM_rotate for '{path}' has two angles ({r1}, {r2}) but the same"
+                    f" dataref value ({v1}) for both, so it can't move. Imported as a"
+                    f" static rotation of {r1} degrees"
+                )
+                self._bake_matrix_stack[-1] = (
+                    self._bake_matrix_stack[-1]
+                    @ Quaternion(dxyz, math.radians(r1)).to_matrix().to_4x4()
                 )
             elif r_r1 != r_r2 and r_v1 != r_v2:
                 # print("rot, case D - dynamic")
@@ -841,7 +955,16 @@ class ImpCommandBuilder:
                     except (IndexError, ValueError):
                         logger.warn("ATTR_manip_wheel: could not parse wheel delta")
             elif directive == "ATTR_axis_detented":
-                if self._pending_manip is not None:
+                try:
+                    zero_axis = not any(float(v) for v in c[:3])
+                except ValueError:
+                    zero_axis = False
+                if zero_axis:
+                    # No axis to lift along: a no-op some tools write. Keep the
+                    # plain manipulator; a detent type would need a location
+                    # animation the OBJ doesn't have, and fail to export.
+                    pass
+                elif self._pending_manip is not None:
                     try:
                         self._pending_manip.has_axis_detented = True
                         self._pending_manip.detent_axis = (
@@ -852,7 +975,13 @@ class ImpCommandBuilder:
                         self._pending_manip.detent_v1_min = float(c[3])
                         self._pending_manip.detent_v1_max = float(c[4])
                         self._pending_manip.detent_dataref = c[5] if len(c) > 5 else ""
-                        self._pending_manip.manip_type = MANIP_DRAG_AXIS_DETENT
+                        # A drag_rotate with a lift axis is still a rotate detent
+                        self._pending_manip.manip_type = (
+                            MANIP_DRAG_ROTATE_DETENT
+                            if self._pending_manip.manip_type
+                            in (MANIP_DRAG_ROTATE, MANIP_DRAG_ROTATE_DETENT)
+                            else MANIP_DRAG_AXIS_DETENT
+                        )
                         if len(c) > 5:
                             self._pending_manip.dataref2 = c[5]
                     except (IndexError, ValueError):
@@ -869,22 +998,17 @@ class ImpCommandBuilder:
                         logger.warn("ATTR_axis_detent_range: could not parse values")
             else:
                 manip_type = directive[len("ATTR_manip_"):]
-                m = self._parse_manip_components(manip_type, c)
-                if m is not None:
-                    self._pending_manip = m
-        elif directive in {
-            "ATTR_draw_disable",
-            "ATTR_draw_enable",
-            "ATTR_cockpit",
-            "ATTR_cockpit_lit_only",
-            "ATTR_cockpit_region",
-            "ATTR_cockpit_device",
-            "ATTR_no_cockpit",
-            "ATTR_solid_camera",
-            "ATTR_no_solid_camera",
-            "ATTR_shiny_rat",
-        }:
+                # Clear on failure too: keeping the previous manipulator would
+                # put it on geometry it was never meant for
+                self._pending_manip = self._parse_manip_components(manip_type, c)
+        elif directive in ATTR_STATE_DIRECTIVES:
             self._apply_pending_attr(directive, args[0] if args else [])
+        elif directive in POINT_DIRECTIVES:
+            self._add_point_block(directive, args[0], name_hint)
+        elif directive == "ATTR_LOD":
+            near, far = (float(v) for v in args[0][:2])
+            self._lods.append((near, far))
+            self._current_lod = len(self._lods) - 1
         else:
             assert False, f"{directive} is not supported yet"
 
@@ -923,9 +1047,6 @@ class ImpCommandBuilder:
                     intermediate_block.datablock_info.parent_info = None
                 intermediate_parent_info = intermediate_block.datablock_info.parent_info
 
-            print(
-                f"Deciding {intermediate_block.name}" f", parent {intermediate_parent}"
-            )
 
             if intermediate_block_type == "EMPTY":
                 # Remember, we only make empties to store animations so no try needed here
@@ -983,7 +1104,6 @@ class ImpCommandBuilder:
                             break
                         else:
                             next_name = next_block.name
-                            print("next name ", next_name)
                             next_block_type = next_block.datablock_type
                             next_block_parent = next_block.parent
                             next_show_hide_animations = next_block.show_hide_animations
@@ -999,16 +1119,29 @@ class ImpCommandBuilder:
                                 is_next_block_loc_anim = False
                                 is_next_block_rot_anim = False
 
-                            if next_block_type == "MESH":
+                            if next_block_type in {"LIGHT", "MAGNET"}:
+                                # Never folded into; the outer loop creates them
+                                return (in_block, searching_itr)
+                            elif next_block_type == "MESH":
                                 # Only collapse EMPTY→MESH when the EMPTY has an identity
                                 # bake_matrix AND a single mesh child. Non-identity bake_matrix
                                 # means the EMPTY carries a static pre-transform that must be
                                 # preserved as a real Blender object. In that case, return
                                 # in_block so it gets processed first, and the MESH is picked
                                 # up on the next outer-loop iteration.
+                                # A mesh's own bake_matrix becomes its
+                                # location/rotation, which Blender applies after
+                                # (inside) any keyed rotation, while X-Plane
+                                # rotates the baked mesh. So a rotating EMPTY only
+                                # folds into a mesh with no bake of its own.
+                                # (Keyed locations add to the bake; those are fine.)
                                 if (
                                     len(in_block.children) == 1
                                     and in_block.bake_matrix == Matrix.Identity(4)
+                                    and (
+                                        next_block.bake_matrix == Matrix.Identity(4)
+                                        or not in_block.transform_animation.rotations
+                                    )
                                 ):
                                     next_block.transform_animation = copy.copy(
                                         in_block.transform_animation
@@ -1022,6 +1155,16 @@ class ImpCommandBuilder:
                                     return next_block, peek_next_block_itr
                                 else:
                                     return in_block, searching_itr
+                            elif (
+                                next_block_type == "EMPTY"
+                                and in_block_path == next_block_path
+                                and next_block.bake_matrix != Matrix.Identity(4)
+                            ):
+                                # A static transform sits between the two
+                                # animations (e.g. a pivot shift). Merging
+                                # would drop it, so keep them as separate
+                                # objects; the outer loop handles next_block.
+                                return (in_block, searching_itr)
                             elif (
                                 next_block_type == "EMPTY"
                                 and in_block_path == next_block_path
@@ -1099,7 +1242,6 @@ class ImpCommandBuilder:
 
                                 # TODO: Assumes dataref ranges are the same
                                 def merge_orthogonal_rotation_axis() -> IntermediateDatablock:
-                                    print("merge orthogonal axis")
                                     """
                                     Attempts to merge any mergable rotations of the next_block into
                                     the in_block. Raises ValueError if next_block has nothing to merge.
@@ -1114,9 +1256,12 @@ class ImpCommandBuilder:
                                     ) in next_animation.rotations.items():
                                         is_axis_aligned = is_vector_axis_aligned(axis)
 
+                                        # -Y and +Y are the same Euler channel, so
+                                        # compare ignoring sign or we'd build a
+                                        # 4-axis "Euler" that can't exist
                                         already_used = any(
-                                            round_vec(axis, PRECISION_KEYFRAME)
-                                            == round_vec(vec, PRECISION_KEYFRAME)
+                                            round_vec(Vector(map(abs, axis)), PRECISION_KEYFRAME)
+                                            == round_vec(Vector(map(abs, vec)), PRECISION_KEYFRAME)
                                             for vec in rotations
                                         )
                                         # print("is_axis_aligned:", is_axis_aligned)
@@ -1239,7 +1384,6 @@ class ImpCommandBuilder:
                     return (in_block, searching_itr)
 
                 # end def optimize_empty_chain
-                print(f"IN {intermediate_block.name}")
                 out_block, blocks_rem_itr = optimize_empty_chain(
                     intermediate_block, blocks_rem_itr
                 )
@@ -1252,10 +1396,7 @@ class ImpCommandBuilder:
                 #                    out_block.transform_animation.xp_dataref.rotation_values,
                 #                )
 
-                print(
-                    f"OUT {out_block.name}, parent: {out_block.parent}, type: {out_block.datablock_type}"
-                )
-            elif intermediate_block_type == "MESH":
+            elif intermediate_block_type in {"MESH", "LIGHT", "MAGNET"}:
                 out_block = intermediate_block
 
             def fill_in_eulers(
@@ -1376,28 +1517,30 @@ class ImpCommandBuilder:
 
                     static_info = DatablockInfo(
                         datablock_type="EMPTY",
-                        name=out_block.datablock_info.name + ".s",
+                        name=self._new_key("", out_block.datablock_info.name + ".s"),
                         parent_info=out_block.datablock_info.parent_info,
                         collection=out_block.datablock_info.collection,
                     )
                     ob_static = self._create_empty(static_info)
+                    ob_static.name = self._display_name(out_block) + ".static"
                     if ob_static.parent and out_block.bake_matrix == Matrix.Identity(4):
                         ob_static.matrix_parent_inverse = Matrix.Identity(4)
-                    ob_static.matrix_local = out_block.bake_matrix.copy()
-                    bpy.context.view_layer.update()
+                    # Mode first: changing between Euler orders keeps the
+                    # numbers, not the orientation, so it must precede the matrix
                     ob_static.rotation_mode = out_block.rotation_mode
+                    ob_static.matrix_local = out_block.bake_matrix.copy()
 
                     dynamic_info = DatablockInfo(
                         datablock_type="EMPTY",
                         name=out_block.datablock_info.name,
-                        parent_info=ParentInfo(ob_static.name),
+                        parent_info=ParentInfo(static_info.name),
                         collection=out_block.datablock_info.collection,
                     )
                     ob_dyn = self._create_empty(dynamic_info)
+                    ob_dyn.name = self._display_name(out_block)
                     ob_dyn.matrix_parent_inverse = Matrix.Identity(4)
-                    ob_dyn.matrix_local = Matrix.Identity(4)
-                    bpy.context.view_layer.update()
                     ob_dyn.rotation_mode = out_block.rotation_mode
+                    ob_dyn.matrix_local = Matrix.Identity(4)
                     try:
                         out_block.transform_animation.apply_animation(ob_dyn)
                     except AttributeError:
@@ -1408,12 +1551,22 @@ class ImpCommandBuilder:
                     ob = None  # already fully set up; skip the shared if ob: block
                 else:
                     ob = self._create_empty(out_block.datablock_info)
+                    ob.name = self._display_name(out_block)
+            elif out_block.datablock_type in {"LIGHT", "MAGNET"}:
+                ob = self._create_point_object(out_block)
+                ob.name = self._display_name(out_block)
             elif out_block.datablock_type == "MESH":
                 try:
-                    ob = out_block.build_mesh(self.vt_table)
+                    ob = out_block.build_mesh(self.vt_table, self._resolve_parent)
                 except ValueError:
                     ob = None
                 else:
+                    self._objects_by_key[out_block.name] = ob
+                    ob.name = self._display_name(out_block)
+                    ob.data.name = ob.name
+                    if out_block.skipped_faces:
+                        self._skipped_faces += out_block.skipped_faces
+                        self._meshes_with_skipped_faces += 1
                     self._assign_imported_material(ob, out_block.attrs)
                     if out_block.manip:
                         self._apply_manip_to_object(ob, out_block.manip)
@@ -1431,10 +1584,13 @@ class ImpCommandBuilder:
                 # world-space transform.
                 if ob.parent and out_block.bake_matrix == Matrix.Identity(4):
                     ob.matrix_parent_inverse = Matrix.Identity(4)
-                ob.matrix_local = out_block.bake_matrix.copy()
-                bpy.context.view_layer.update()
-
+                # Mode first (see ob_static above)
                 ob.rotation_mode = out_block.rotation_mode
+                ob.matrix_local = out_block.bake_matrix.copy()
+
+                if out_block.lod is not None and ob.type in {"MESH", "LIGHT"}:
+                    ob.xplane.override_lods = True
+                    ob.xplane.lod[min(out_block.lod, MAX_LODS - 2)] = True
 
                 try:
                     out_block.transform_animation.apply_animation(ob)
@@ -1447,7 +1603,14 @@ class ImpCommandBuilder:
         # end while for searching remaining blocks
         # TODO: Unit test, and what about a bunch of animations that get optimized out with not TRIS blocks?
         # Put this later
-        if not bpy.data.objects:
+        if self._skipped_faces:
+            logger.warn(
+                f"Left out {self._skipped_faces} degenerate triangle(s) in"
+                f" {self._meshes_with_skipped_faces} mesh(es): they repeat a vertex or"
+                " point past the vertex table, so X-Plane doesn't draw them either"
+            )
+
+        if not self.root_collection.all_objects:
             logger.warn(".obj had no real datablocks to create")
             return {"CANCELLED"}
 
@@ -1466,6 +1629,16 @@ class ImpCommandBuilder:
             layer.texture_lit = str(self.texture_lit)
         if self.texture_normal:
             layer.texture_normal = str(self.texture_normal)
+        # Meaningless without a normal map, and the exporter would drop it and the
+        # specular with it; without it, specular is kept as ATTR_shiny_rat
+        layer.normal_metalness = self.normal_metalness and self.texture_normal is not None
+        layer.blend_glass = self.blend_glass
+        self._apply_cockpit_regions(layer)
+        self._apply_lods(layer)
+        for name, value in self.custom_header:
+            attr = layer.customAttributes.add()
+            attr.name = name
+            attr.value = value
 
         return {"FINISHED"}
 
@@ -1510,31 +1683,238 @@ class ImpCommandBuilder:
         info.parent_info = None  # prevent 4.3.x set_parent call inside create_datablock_empty
         ob = test_creation_helpers.create_datablock_empty(info)
         if our_parent_info and our_parent_info.parent:
-            pref = our_parent_info.parent
-            parent_ob = bpy.data.objects.get(pref) if isinstance(pref, str) else pref
+            parent_ob = self._resolve_parent(our_parent_info.parent)
             if parent_ob:
                 ob.parent = parent_ob
         info.parent_info = our_parent_info  # restore for future reads
+        self._objects_by_key[info.name] = ob
         return ob
 
-    def _next_empty_name(self) -> str:
-        return (
-            f"ImpEmpty."
-            f"{sum(1 for block in self._blocks if block.datablock_type == 'EMPTY'):03}"
-            f"_{hex(hash(self.root_collection.name))[2:6]}"
-            f"_{random.randint(0,100000)}"
-        )
+    def _add_point_block(self, directive: str, c: List[str], name_hint: str) -> None:
+        """
+        LIGHT_NAMED <name> x y z, LIGHT_PARAM <name> x y z <params...>,
+        LIGHT_CUSTOM x y z r g b a s s1 t1 s2 t2 <dataref>,
+        MAGNET <debug name> <type> x y z <yaw> <pitch> <roll>.
+        Raises ValueError/IndexError on malformed lines (the parser reports them).
+        """
+        if directive == "MAGNET":
+            if len(c) < 8:
+                raise IndexError
+            *name_parts, magnet_type = c[:-6]
+            x, y, z, yaw, pitch, roll = map(float, c[-6:])
+            # Inverse of what the exporter writes: yaw=-euler.z, pitch=euler.x, roll=euler.y
+            rotation = Euler(
+                (math.radians(pitch), math.radians(roll), math.radians(-yaw)), "XYZ"
+            ).to_matrix().to_4x4()
+            fields = {"name": " ".join(name_parts), "type": magnet_type}
+            datablock_type = "MAGNET"
+            # Magnets only exist in cockpit objects
+            self.is_cockpit = True
+        elif directive == "LIGHT_CUSTOM":
+            x, y, z = map(float, c[0:3])
+            rgba_size_uv = [float(v) for v in c[3:12]]
+            if len(rgba_size_uv) < 9:
+                raise IndexError
+            fields = {"values": rgba_size_uv, "dataref": c[12] if len(c) > 12 else ""}
+            rotation = Matrix.Identity(4)
+            datablock_type = "LIGHT"
+        else:
+            x, y, z = map(float, c[1:4])
+            fields = {"name": c[0], "params": " ".join(c[4:])}
+            rotation = Matrix.Identity(4)
+            datablock_type = "LIGHT"
 
-    def _next_object_name(self) -> str:
-        return (
-            f"ImpMesh."
-            f"{sum(1 for block in self._blocks if block.datablock_type == 'MESH'):03}"
-            f"_{hex(hash(self.root_collection.name))[2:6]}"
-            f"_{random.randint(0,100000)}"
+        if not self._anim_intermediate_stack:
+            parent = self.root_intermediate_datablock
+        else:
+            parent = self._anim_intermediate_stack[-1].intermediate_datablock
+        block = IntermediateDatablock(
+            datablock_info=DatablockInfo(
+                datablock_type=datablock_type,
+                name=self._new_key(name_hint, fields.get("name") or directive),
+                parent_info=ParentInfo(parent.datablock_info.name),
+                collection=self.root_collection,
+            ),
+            start_idx=None,
+            count=None,
+            transform_animation=None,
+            show_hide_animations=[],
+            bake_matrix=self._bake_matrix_stack[-1]
+            @ Matrix.Translation(vec_x_to_b((x, y, z)))
+            @ rotation,
         )
+        block.point = (directive, fields)
+        block.lod = self._current_lod
+        self._blocks.append(block)
+        parent.children.append(block)
+
+    def _create_point_object(self, block: IntermediateDatablock) -> bpy.types.Object:
+        directive, fields = block.point
+        name = block.name
+        if directive == "MAGNET":
+            ob = bpy.data.objects.new(name, None)
+            ob.empty_display_type = "ARROWS"
+            ob.empty_display_size = 0.05
+            props = ob.xplane.special_empty_props
+            props.special_type = EMPTY_USAGE_MAGNET
+            props.magnet_props.debug_name = fields["name"]
+            kinds = set(fields["type"].split("|"))
+            props.magnet_props.magnet_type_is_xpad = "xpad" in kinds
+            props.magnet_props.magnet_type_is_flashlight = "flashlight" in kinds
+        else:
+            light = bpy.data.lights.new(name, "POINT")
+            # A Point light keeps the exporter from adding direction-correcting
+            # rotations: the OBJ's light already points where it should
+            if directive == "LIGHT_NAMED":
+                light.xplane.type = LIGHT_NAMED
+                light.xplane.name = fields["name"]
+            elif directive == "LIGHT_PARAM":
+                light.xplane.type = LIGHT_PARAM
+                light.xplane.name = fields["name"]
+                light.xplane.params = fields["params"]
+            else:
+                r, g, b, a, size, s1, t1, s2, t2 = fields["values"]
+                light.xplane.type = LIGHT_CUSTOM
+                # Override, since custom light colors may be outside 0-1
+                light.xplane.enable_rgb_override = True
+                light.xplane.rgb_override_values = (r, g, b)
+                light.energy = a
+                light.xplane.size = size
+                light.xplane.uv = (s1, t1, s2, t2)
+                light.xplane.dataref = fields["dataref"]
+            ob = bpy.data.objects.new(name, light)
+        test_creation_helpers.set_collection(ob, block.datablock_info.collection)
+        parent_info = block.datablock_info.parent_info
+        if parent_info is not None:
+            parent_ob = self._resolve_parent(parent_info.parent)
+            if parent_ob is not None:
+                ob.parent = parent_ob
+        self._objects_by_key[name] = ob
+        return ob
+
+    def set_texture(self, directive: str, named: Path, found: Optional[Path]) -> None:
+        attr = {
+            "TEXTURE": "texture",
+            "TEXTURE_LIT": "texture_lit",
+            "TEXTURE_NORMAL": "texture_normal",
+        }[directive]
+        setattr(self, attr, named)
+        if directive == "TEXTURE":
+            self.texture_file = found
+
+    def set_header_state(self, directive: str, c: List[str]) -> None:
+        """Header directives that map to a layer setting or starting attribute state"""
+
+        def number(i: int, default: float) -> float:
+            try:
+                return float(c[i])
+            except (IndexError, ValueError):
+                return default
+
+        attrs = self._pending_attrs
+        if directive == "NORMAL_METALNESS":
+            self.normal_metalness = True
+        elif directive == "BLEND_GLASS":
+            self.blend_glass = True
+        elif directive == "COCKPIT_REGION":
+            try:
+                self.cockpit_regions.append(tuple(int(v) for v in c[:4]))
+            except ValueError:
+                logger.warn(f"COCKPIT_REGION: expected 4 pixel values, got '{' '.join(c)}'")
+        elif directive == "GLOBAL_specular":
+            # Same as every TRIS starting with ATTR_shiny_rat <v>
+            attrs.shiny_rat = number(0, 1.0)
+            attrs.has_explicit_shiny_rat = True
+            self._header_shiny_rat = attrs.shiny_rat
+        elif directive in {"GLOBAL_no_blend", "GLOBAL_shadow_blend"}:
+            attrs.blend = BLEND_OFF if directive == "GLOBAL_no_blend" else BLEND_SHADOW
+            attrs.blend_ratio = number(0, 0.5)
+        elif directive == "GLOBAL_no_shadow":
+            attrs.shadow = False
+
+    def _apply_lods(self, layer) -> None:
+        max_buckets = MAX_LODS - 1
+        if not self._lods:
+            return
+        layer.lods = str(min(len(self._lods), max_buckets))
+        for i, (near, far) in enumerate(self._lods[:max_buckets]):
+            layer.lod[i].near = round(near)
+            layer.lod[i].far = round(far)
+        if len(self._lods) > max_buckets:
+            logger.warn(
+                f"OBJ has {len(self._lods)} ATTR_LODs; the exporter supports"
+                f" {max_buckets}, so the extra ones were merged into the last"
+            )
+
+    def _apply_cockpit_regions(self, layer) -> None:
+        regions = self.cockpit_regions[:MAX_COCKPIT_REGIONS]
+        if not regions:
+            return
+        layer.cockpit_regions = str(len(regions))
+        for i, (left, bottom, right, top) in enumerate(regions):
+            region = layer.cockpit_region[i]
+            region.left, region.top = left, bottom  # "top" is really the bottom
+            # Stored as powers of two, which is all X-Plane allows anyway
+            region.width = max(1, round(math.log2(max(1, right - left))))
+            region.height = max(1, round(math.log2(max(1, top - bottom))))
+        if len(self.cockpit_regions) > MAX_COCKPIT_REGIONS:
+            logger.warn(
+                f"OBJ has {len(self.cockpit_regions)} COCKPIT_REGIONs; only the first"
+                f" {MAX_COCKPIT_REGIONS} were imported"
+            )
+
+    def _resolve_parent(self, parent: Union[str, bpy.types.Object, None]) -> Optional[bpy.types.Object]:
+        if isinstance(parent, bpy.types.Object):
+            return parent
+        return self._objects_by_key.get(parent)
+
+    def _new_key(self, name_hint: str, fallback: str) -> str:
+        """A key for a new intermediate block, unique within this import"""
+        base = name_hint or fallback
+        key, n = base, 0
+        while key in self._used_keys:
+            n += 1
+            key = f"{base}.{n:03}"
+        self._used_keys.add(key)
+        if name_hint:
+            self._hint_by_key[key] = name_hint
+        return key
+
+    def _display_name(self, block: IntermediateDatablock) -> str:
+        """
+        What the user sees in the Outliner: the OBJ's name hint when it has one,
+        else what the object does (its dataref or manipulator command), so a
+        cockpit reads as "flap_ratio", "servos_toggle" instead of "ImpMesh.412"
+        """
+        if block.name in self._hint_by_key:
+            return self._hint_by_key[block.name]
+        if block.point:
+            directive, fields = block.point
+            return fields.get("name") or ("CustomLight" if directive == "LIGHT_CUSTOM" else directive)
+
+        def last_part(path: str) -> str:
+            return path.replace("CMND=", "").rstrip("/").rsplit("/", 1)[-1]
+
+        manip = block.manip if block.datablock_type == "MESH" else None
+        if manip:
+            for path in (manip.command, manip.positive_command, manip.dataref1):
+                if path and path != "none":
+                    return last_part(path)
+        animations = [block.transform_animation, *block.show_hide_animations]
+        for animation in animations:
+            path = animation.xp_dataref.path if animation else ""
+            if path and path != "none":
+                return last_part(path)
+        return "Mesh" if block.datablock_type == "MESH" else "Anim"
 
     def _apply_pending_attr(self, directive: str, c: List[str]) -> None:
         attrs = self._pending_attrs
+
+        def number(i: int, cast=float, default=None):
+            try:
+                return cast(c[i])
+            except (IndexError, ValueError):
+                return default
 
         if directive == "ATTR_draw_disable":
             attrs.draw = False
@@ -1544,43 +1924,80 @@ class ImpCommandBuilder:
             attrs.cockpit_mode = COCKPIT_FEATURE_NONE
             attrs.cockpit_region = 0
             attrs.cockpit_device_args = ()
-        elif directive == "ATTR_cockpit":
-            attrs.cockpit_mode = PANEL_COCKPIT
+            attrs.cockpit_luminance = None
+        elif directive in {"ATTR_cockpit", "ATTR_cockpit_lit_only"}:
+            mode = PANEL_COCKPIT if directive == "ATTR_cockpit" else PANEL_COCKPIT_LIT_ONLY
+            attrs.cockpit_mode = mode
             attrs.cockpit_region = 0
             attrs.cockpit_device_args = ()
-            self._set_cockpit_panel_mode(PANEL_COCKPIT)
-        elif directive == "ATTR_cockpit_lit_only":
-            attrs.cockpit_mode = PANEL_COCKPIT_LIT_ONLY
-            attrs.cockpit_region = 0
-            attrs.cockpit_device_args = ()
-            self._set_cockpit_panel_mode(PANEL_COCKPIT_LIT_ONLY)
+            attrs.cockpit_luminance = number(0, int)
+            self._set_cockpit_panel_mode(mode)
         elif directive == "ATTR_cockpit_region":
             attrs.cockpit_mode = PANEL_COCKPIT_REGION
-            try:
-                attrs.cockpit_region = int(c[0])
-            except (IndexError, ValueError):
-                attrs.cockpit_region = 0
+            attrs.cockpit_region = number(0, int, 0)
             attrs.cockpit_device_args = ()
+            attrs.cockpit_luminance = number(1, int)
             self._set_cockpit_panel_mode(PANEL_COCKPIT_REGION)
         elif directive == "ATTR_cockpit_device":
             attrs.cockpit_mode = COCKPIT_FEATURE_DEVICE
             attrs.cockpit_region = 0
-            attrs.cockpit_device_args = tuple(c)
+            attrs.cockpit_device_args = tuple(c[:4])
+            attrs.cockpit_luminance = number(4, int)
         elif directive == "ATTR_solid_camera":
             attrs.solid_camera = True
         elif directive == "ATTR_no_solid_camera":
             attrs.solid_camera = False
         elif directive == "ATTR_shiny_rat":
-            try:
-                attrs.shiny_rat = float(c[0])
-            except (IndexError, ValueError):
+            shiny_rat = number(0)
+            if shiny_rat is None:
                 logger.warn("ATTR_shiny_rat: could not parse value")
                 return
+            attrs.shiny_rat = shiny_rat
             attrs.has_explicit_shiny_rat = True
+        elif directive == "ATTR_reset":
+            # Resets the material colors (diffuse/emission/specular, deprecated)
+            # and ATTR_shiny_rat; of those we keep only shininess
+            # Explicit, so the exporter writes it and the previous material's
+            # shininess doesn't carry over
+            attrs.shiny_rat = self._header_shiny_rat or 0.0
+            attrs.has_explicit_shiny_rat = True
+        elif directive == "ATTR_light_level":
+            v1, v2 = number(0), number(1)
+            if v1 is None or v2 is None or len(c) < 3:
+                logger.warn(f"ATTR_light_level: expected 'v1 v2 dataref', got '{' '.join(c)}'")
+                return
+            attrs.light_level = (v1, v2, c[2], number(3, int))
+        elif directive == "ATTR_light_level_reset":
+            attrs.light_level = None
+        elif directive == "ATTR_blend":
+            attrs.blend = BLEND_ON
+        elif directive in {"ATTR_no_blend", "ATTR_shadow_blend"}:
+            attrs.blend = BLEND_OFF if directive == "ATTR_no_blend" else BLEND_SHADOW
+            attrs.blend_ratio = number(0, float, 0.5)
+        elif directive == "ATTR_shadow":
+            attrs.shadow = True
+        elif directive == "ATTR_no_shadow":
+            attrs.shadow = False
+        elif directive in {"ATTR_hard", "ATTR_hard_deck"}:
+            attrs.surface = c[0] if c else SURFACE_TYPE_CONCRETE
+            attrs.deck = directive == "ATTR_hard_deck"
+        elif directive == "ATTR_no_hard":
+            attrs.surface = SURFACE_TYPE_NONE
+            attrs.deck = False
+        elif directive == "ATTR_poly_os":
+            attrs.poly_os = number(0, int, 0)
+        elif directive == "ATTR_draped":
+            attrs.draped = True
+        elif directive == "ATTR_no_draped":
+            attrs.draped = False
 
     def _set_cockpit_panel_mode(self, mode: str) -> None:
-        if self._cockpit_panel_mode is None:
-            self._cockpit_panel_mode = mode
+        # ATTR_cockpit mixed with ATTR_cockpit_region is common (whole panel plus
+        # regions). Regions mode exports both, so it wins over plain cockpit.
+        region_mix = {self._cockpit_panel_mode, mode} == {PANEL_COCKPIT, PANEL_COCKPIT_REGION}
+        if self._cockpit_panel_mode is None or region_mix:
+            if self._cockpit_panel_mode != PANEL_COCKPIT_REGION:
+                self._cockpit_panel_mode = mode
         elif self._cockpit_panel_mode != mode:
             logger.warn(
                 "OBJ uses mixed cockpit panel attribute modes; "
@@ -1607,6 +2024,7 @@ class ImpCommandBuilder:
             f"ImportedMaterial.{len(self._materials_by_attr_key):03}"
         )
         material.use_nodes = True
+        self._add_texture_nodes(material)
         material.xplane.draw = attrs.draw
         material.xplane.solid_camera = attrs.solid_camera
         material["xplane_imp_suppress_default_shiny_rat"] = (
@@ -1632,8 +2050,60 @@ class ImpCommandBuilder:
         else:
             material.xplane.cockpit_feature = COCKPIT_FEATURE_NONE
 
+        if attrs.cockpit_luminance is not None:
+            material.xplane.cockpit_feature_use_luminance = True
+            material.xplane.cockpit_feature_luminance = attrs.cockpit_luminance
+
+        if attrs.light_level:
+            v1, v2, dataref, brightness = attrs.light_level
+            material.xplane.lightLevel = True
+            material.xplane.lightLevel_v1 = v1
+            material.xplane.lightLevel_v2 = v2
+            material.xplane.lightLevel_dataref = dataref
+            if brightness is not None:
+                material.xplane.lightLevel_photometric = True
+                material.xplane.lightLevel_brightness = brightness
+
+        material.xplane.blend_v1000 = attrs.blend
+        material.xplane.blendRatio = attrs.blend_ratio
+        material.xplane.shadow_local = attrs.shadow
+        try:
+            material.xplane.surfaceType = attrs.surface
+        except TypeError:
+            logger.warn(f"Unknown ATTR_hard surface '{attrs.surface}', imported as concrete")
+            material.xplane.surfaceType = SURFACE_TYPE_CONCRETE
+        material.xplane.deck = attrs.deck
+        material.xplane.poly_os = attrs.poly_os
+        material.xplane.draped = attrs.draped
+
         self._materials_by_attr_key[key] = material
         return material
+
+    def _add_texture_nodes(self, material: bpy.types.Material) -> None:
+        """
+        Shows the OBJ's TEXTURE in the viewport. Display only: the exporter
+        writes the texture from the collection's X-Plane settings, not nodes.
+        """
+        if not self.texture_file:
+            return
+        try:
+            image = bpy.data.images.load(str(self.texture_file), check_existing=True)
+        except RuntimeError as e:
+            logger.warn(f"Blender couldn't load '{self.texture_file}' for display: {e}")
+            self.texture_file = None
+            return
+        nodes = material.node_tree.nodes
+        bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is None:
+            return
+        tex = nodes.new("ShaderNodeTexImage")
+        tex.image = image
+        tex.location = (bsdf.location.x - 320, bsdf.location.y)
+        links = material.node_tree.links
+        links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        # Cutouts (grilles, labels) need alpha; hashed avoids sorting problems
+        material.blend_method = "HASHED"
 
     def _apply_cockpit_device_args(
         self, material: bpy.types.Material, args: Tuple[str, ...]
@@ -1673,6 +2143,16 @@ class ImpCommandBuilder:
 
         def tail(start: int) -> str:
             return " ".join(c[start:]) if start < len(c) else ""
+
+        # Some older tools leave out the cursor ("ATTR_manip_drag_axis 0.02 0 0 ...")
+        if manip_type != MANIP_NOOP and c:
+            try:
+                float(c[0])
+            except ValueError:
+                pass
+            else:
+                logger.warn(f"ATTR_manip_{manip_type} has no cursor; using 'hand'")
+                c = ["hand", *c]
 
         m = IntermediateManipulator(manip_type=manip_type)
         try:

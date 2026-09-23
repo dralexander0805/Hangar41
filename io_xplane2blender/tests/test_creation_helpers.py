@@ -973,10 +973,18 @@ def set_animation_data(
             bpy.context.view_layer.objects.active.data.bones.active = blender_bone
             bpy.ops.bone.add_xplane_dataref_keyframe(index=dataref_index)
         else:
-            bpy.context.view_layer.objects.active = blender_struct
-            bpy.ops.object.add_xplane_dataref_keyframe(
-                {"object": blender_struct}, index=dataref_index
+            # Inserting the location/rotation keyframes re-evaluates the action,
+            # which resets dataref_prop.value to its animated value, so set it
+            # again and key it directly rather than via the operator.
+            if kf_info.dataref_anim_type == xplane_constants.ANIM_TYPE_TRANSFORM:
+                dataref_prop.value = kf_info.dataref_value
+            dataref_prop.keyframe_insert(
+                data_path="value", frame=kf_info.idx, group="XPlane Datarefs"
             )
+            for fcurve in blender_struct.animation_data.action.fcurves:
+                if fcurve.data_path == dataref_prop.path_from_id("value"):
+                    for keyframe in fcurve.keyframe_points:
+                        keyframe.interpolation = "LINEAR"
 
 
 def set_collection(

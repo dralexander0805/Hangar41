@@ -1,94 +1,110 @@
-# Hangar41
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/hangar41-logo-dark.svg">
+    <img src="docs/brand/hangar41-logo.svg" alt="Hangar41" width="520">
+  </picture>
+</p>
 
-![Beta](https://img.shields.io/badge/status-beta-orange)
-![Blender](https://img.shields.io/badge/Blender-4.1-blue?logo=blender)
-![X-Plane](https://img.shields.io/badge/X--Plane-12-darkblue)
-![License](https://img.shields.io/badge/license-GPL--3.0-green)
+<p align="center">
+  <b>Take any X-Plane .obj into Blender, and back out again.</b><br>
+  Animations, manipulators, lights and materials make the round trip intact.
+</p>
 
-**Import an existing X-Plane `.obj` into Blender 4.1, edit it, and export it back to a working object — a full round-trip.**
+<p align="center">
+  <a href="#install">Install</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="#use">Use</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="#what-makes-the-trip">What makes the trip</a>&nbsp;&nbsp;·&nbsp;&nbsp;<a href="#good-to-know">Good to know</a>
+</p>
 
-A few importers for X-Plane objects already exist, but in practice they've been partial or unreliable — they can pull geometry and some keyframes into Blender, but the result doesn't cleanly re-export. The hard part has always been that other direction: getting an imported object back *out* in a state that works in sim. That's what Hangar41 is built around — a full round-trip, with meshes, animations, and manipulators surviving the trip in and back out again.
+<br>
 
-> ⚠️ **Beta** — core functionality is solid in testing, but this hasn't been validated against every kind of OBJ out there. If something comes out wrong, please open an issue and attach the OBJ.
+<p align="center">
+  <img src="docs/images/hero-cockpit.jpg" alt="The Cessna 172 cockpit from X-Plane 12, imported into Blender with Hangar41, fully textured" width="100%">
+  <br>
+  <sub>Laminar Research's Cessna 172, as it ships with X-Plane 12, imported with Hangar41. Instruments are separate objects in X-Plane, so their faces aren't part of this import.</sub>
+</p>
 
----
+<br>
 
-## Demo
+Importers for X-Plane objects have existed for years. They bring geometry and some keyframes into Blender, but what comes out the other side rarely exports cleanly. Hangar41 is built around the whole trip: import a cockpit, change what you need, and export an object that still has every animation, click spot and light it started with.
 
-Import → edit → re-export, working in sim:
+<br>
 
-![Round-trip demo](docs/round-trip.gif)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/round-trip-dark.svg">
+    <img src="docs/images/round-trip.svg" alt="Import an X-Plane .obj into Blender, edit it, export it back" width="100%">
+  </picture>
+</p>
 
-Detent manipulators surviving the round-trip (flap handle):
+## What makes the trip
 
-![Detent manipulator demo](docs/detent-manip.gif)
+<table>
+  <tr><td><b>Geometry</b></td><td>Every drawable triangle, with the object's own normals, UVs and double-sided faces.</td></tr>
+  <tr><td><b>Animation</b></td><td>Translations, rotations, show/hide and keyframe loops, including nested pivots. Each part lands exactly where X-Plane puts it.</td></tr>
+  <tr><td><b>Manipulators</b></td><td>Every type, including detents for flap handles, speedbrakes and gear levers.</td></tr>
+  <tr><td><b>Lights and magnets</b></td><td>Named, parameter and custom billboard lights. EFB and flashlight magnets.</td></tr>
+  <tr><td><b>Materials</b></td><td>Light levels, cockpit panels and regions, blending, shadows, hard surfaces, shininess.</td></tr>
+  <tr><td><b>Structure</b></td><td>LOD buckets, textures (with X-Plane's <code>.png</code> to <code>.dds</code> fallback), cockpit and aircraft settings.</td></tr>
+</table>
 
+In Blender, imports are textured in the viewport and named after what they do: `yoke_roll_ratio` and `servos_toggle`, not `Mesh.412`.
 
----
+## Tested on real aircraft
 
-## Features
+28 cockpit and cabin objects from X-Plane 11 and 12 aircraft, by many different authors. Each was imported, exported and re-imported, and checked against an independent reading of the original `.obj` at three animation positions.
 
-- **OBJ Importer** — bring any X-Plane `.obj` directly into Blender
-- **Round-trip export** — re-export an imported object back to a working `.obj`
-- **Animations** — translations, rotations, show/hide
-- **Manipulators** — including detent manips (flap handles, speedbrakes, gear levers)
-- Blender 4.1 compatible
+<table align="center">
+  <tr>
+    <td align="center"><h3>5,614</h3>parts, each within 2&nbsp;mm<br>of where X-Plane puts it</td>
+    <td align="center"><h3>930k</h3>triangles</td>
+    <td align="center"><h3>3,300+</h3>manipulators<br>kept</td>
+    <td align="center"><h3>66</h3>lights and<br>magnets kept</td>
+  </tr>
+</table>
 
----
+## Install
 
-## Known limitations
+Hangar41 needs **Blender 4.1** and reads objects from **X-Plane 11 and 12**.
 
-This is a beta and has been tested mainly against my own library, which isn't representative of everything people have built. Expect rough edges in:
+1. **Disable XPlane2Blender** if you have it. Hangar41 is built on it and shares its add-on name and settings, so only one can be enabled at a time.
+2. Download this repository and zip the `io_xplane2blender` folder.
+3. In Blender, open **Edit → Preferences → Add-ons → Install**, pick the zip, and enable
+   **Import-Export: Hangar41: X-Plane .obj Import/Export**.
 
-- Deeply nested or stacked animations
-- Less common manipulator types beyond those listed above
-- Objects authored in unusual ways by other tools or older exporters
+## Use
 
-Bug reports with the offending `.obj` attached are the most useful thing you can contribute right now.
+**Import.** Choose **File → Import → X-Plane Object (.obj)**. Each file becomes its own collection, already set up for export: export type, textures, cockpit regions and LODs all come from the `.obj`.
 
----
+**Edit.** Work as you normally would in Blender. Animated parts are empties named after their datarefs, and manipulators live in each object's X-Plane properties.
 
-## Requirements
+**Export.** In **Scene Properties → X-Plane**, click **Export OBJs**. Save to a folder on the same drive as the textures, since X-Plane needs texture paths relative to the `.obj`.
 
-- Blender 4.1
-- X-Plane 12
+<p align="center">
+  <img src="docs/images/blender-ui.jpg" alt="Blender with an imported cockpit, the Outliner showing named parts and lights, and the Hangar41 X-Plane panel" width="100%">
+</p>
 
----
+## Good to know
 
-## Installation
+Hangar41 is in beta. Keep backups of your `.blend` files.
 
-1. Download or clone this repo
-2. Zip the `io_xplane2blender` folder
-3. In Blender: **Edit → Preferences → Add-ons → Install from File**
-4. Select the zip, then enable **"Import-Export: XPlane2Blender"**
-5. Restart Blender
+**If something wasn't imported, you're told.** After each import, the Info bar lists anything that won't make it into an export; the full log is in Blender's Text Editor as *Import for …*. Right now that covers:
 
----
+- `LIGHT_SPILL_CUSTOM`, old-style `LIGHTS` vertex lights, and `EMITTER`
+- attributes from before X-Plane 10: `ATTR_cull`, `ATTR_no_cull`, `ATTR_diffuse_rgb`, `ATTR_emission_rgb`
+- detent ranges on a drag manipulator whose `ATTR_axis_detented` has a zero axis (the manipulator itself is kept)
 
-## Usage
+**Some things are written differently but mean the same to X-Plane.** A header `GLOBAL_specular` becomes per-material `ATTR_shiny_rat`, static `ANIM_rotate` and `ANIM_trans` are baked into the geometry, and state on invisible click zones is left out.
 
-### Import
+**"Light name is unknown" on export** comes from the bundled `lights.txt`, which predates X-Plane 12. The lights are still written exactly as they were imported.
 
-**File → Import → X-Plane Object (.obj)**
+## Reporting bugs
 
-### Export
-
-1. Open the **Scene Properties** panel
-2. Scroll to the **X-Plane** section
-3. Set your X-Plane version, collection type, and texture paths
-4. Click **Export OBJs**
-
----
+The most useful report is an issue with the `.obj` attached, plus the *Import for …* text from Blender's Text Editor.
 
 ## Credits
 
-Hangar41 builds on the work of people who tackled X-Plane OBJ import before it:
+Hangar41 builds on [**XPlane2Blender**](https://github.com/X-Plane/XPlane2Blender), Laminar Research's official exporter. Laminar's experimental importer (4.2 alpha) and Ted Greene's writing on why round-trip import is hard shaped the approach here. If a project belongs on this list, open an issue.
 
-- [**XPlane2Blender**](https://github.com/X-Plane/XPlane2Blender) — Laminar Research's official exporter, and the foundation this add-on extends. Laminar's experimental importer (4.2 alpha) and Ted Greene's writing on why round-trip import is hard shaped the approach here.
-
-If I've missed a project that belongs here, open an issue and I'll add it.
-
----
+The wordmark's lettering is [Montserrat](https://github.com/JulietaUla/Montserrat) (SIL Open Font License), converted to outlines.
 
 ## License
 

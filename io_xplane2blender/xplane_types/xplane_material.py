@@ -271,6 +271,10 @@ class XPlaneMaterial:
                 }[cockpit_panel_mode]
                 value = []
                 # fmt: on
+                if cockpit_panel_mode == PANEL_COCKPIT_REGION and not cockpit_region:
+                    # A panel material with no region in a regions file uses the
+                    # whole panel; ATTR_cockpit_region without an index is invalid
+                    attr = ckpt_attrs["ATTR_cockpit"]
                 if cockpit_panel_mode == PANEL_COCKPIT_REGION and cockpit_region:
                     value.append(cockpit_region - 1)
 

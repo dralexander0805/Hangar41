@@ -594,7 +594,17 @@ class XPlaneHeader:
         else:
             respath = os.path.abspath(os.path.normpath(os.path.join(blenddir, respath)))
 
-        respath = os.path.relpath(respath, exportdir)
+        try:
+            respath = os.path.relpath(respath, exportdir)
+        except ValueError:
+            # Windows: no relative path exists between two drives
+            logger.error(
+                f"'{respath}' is on a different drive from the export folder"
+                f" '{exportdir}'. X-Plane needs texture paths relative to the .obj,"
+                " so export to a folder on the same drive as the textures"
+                " (or move the textures)"
+            )
+            return respath.replace("\\", "/")
 
         # Replace any \ separators if you're on Windows. For other platforms this does nothing
         return respath.replace("\\", "/")

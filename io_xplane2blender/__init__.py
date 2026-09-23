@@ -22,29 +22,30 @@
 # Variable: bl_info
 # Contains informations for Blender to recognize and categorize the addon.
 bl_info = {
-    "name": "Import-Export: X-Plane (.obj)",
-    "description": "Import and Export X-Plane objects/planes (.obj format)",
-    "author": "Ted Greene, Ben Supnik",
+    "name": "Hangar41: X-Plane .obj Import/Export",
+    "description": "Import X-Plane objects (.obj), edit them, and export them back",
+    "author": "Ted Greene, Ben Supnik, Hangar41 contributors",
     "version": (4, 2, 0),
-    "blender": (2, 80, 0),
-    "location": "File > Import/Export > X-Plane",
-    "warning": "",
-    "wiki_url": "https://github.com/X-Plane/XPlane2Blender/wiki",
-    "tracker_url": "https://github.com/X-Plane/XPlane2Blender/issues",
+    "blender": (4, 1, 0),
+    "location": "File > Import/Export > X-Plane Object (.obj)",
+    "warning": "Beta. Replaces XPlane2Blender; disable that add-on first",
+    "doc_url": "https://github.com/dralexander0805/Hangar41",
+    "tracker_url": "https://github.com/dralexander0805/Hangar41/issues",
     "category": "Import-Export",
 }
 
 if "bpy" in locals():
-    import imp
+    # imp was removed in Python 3.12 (Blender 4.2+)
+    import importlib
 
-    imp.reload(xplane_ui)
-    imp.reload(xplane_props)
-    imp.reload(xplane_import)
-    imp.reload(xplane_export)
-    imp.reload(xplane_ops)
-    imp.reload(xplane_ops_dev)
-    imp.reload(xplane_config)
-    imp.reload(xplane_updater)
+    importlib.reload(xplane_ui)
+    importlib.reload(xplane_props)
+    importlib.reload(xplane_import)
+    importlib.reload(xplane_export)
+    importlib.reload(xplane_ops)
+    importlib.reload(xplane_ops_dev)
+    importlib.reload(xplane_config)
+    importlib.reload(xplane_updater)
 else:
     import bpy
     from . import xplane_ui

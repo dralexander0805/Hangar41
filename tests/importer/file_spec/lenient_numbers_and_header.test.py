@@ -116,6 +116,33 @@ class TestLenientNumbersAndHeader(XPlaneTestCase):
         self.assertEqual(layer.lods, "1")
         self.assertEqual((layer.lod[0].near, layer.lod[0].far), (0, 36584))
 
+    def test_never_drawn_lod_left_out(self) -> None:
+        # RescueX: "ATTR_LOD 0 0" first, which X-Plane never draws
+        import_obj(
+            write_obj(
+                "zero_lod",
+                "I\n800\nOBJ\n\n"
+                + BODY
+                + "ATTR_LOD 0 0\nTRIS 0 3\nATTR_LOD 0 1000\nTRIS 0 3\n",
+            )
+        )
+        layer = bpy.data.collections["zero_lod"].xplane.layer
+        self.assertEqual(layer.lods, "1")
+        self.assertEqual((layer.lod[0].near, layer.lod[0].far), (0, 1000))
+        self.assertEqual(len(self.meshes()), 1)
+
+    def test_truncated_hide_left_out(self) -> None:
+        # A static 747-8F writes "ANIM_hide <tab> arginal/groundtraffic/speed"
+        import_obj(
+            write_obj(
+                "truncated_hide",
+                "I\n800\nOBJ\n\n"
+                + BODY
+                + "ANIM_begin\nANIM_hide\t\targinal/groundtraffic/speed\nTRIS 0 3\nANIM_end\n",
+            )
+        )
+        self.assertEqual(len(self.meshes()), 1)
+
     def test_garbage_still_fails(self) -> None:
         with self.assertRaises(xplane_imp_parser.UnrecoverableParserError):
             import_obj(

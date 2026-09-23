@@ -863,13 +863,13 @@ class XPlaneFile:
                         )
                     # LOD spec #6
                     elif prev_lod.far < next_lod.near:
-                        logger.error(
+                        logger.warn(
                             f"In {self.filename}, gap found between LOD bucket #{i} and {i+1}. Far and Near should match: ({prev_lod}, {next_lod})"
                         )
                     elif (
                         prev_lod.far > next_lod.near and len(additive_pairs) == 1
                     ):  # every additive pair's far will always be greater than 0, ignore
-                        logger.error(
+                        logger.warn(
                             f"In {self.filename}, overlap found between LOD bucket #{i} and {i+1}. Far and Near should match: ({prev_lod}, {next_lod})"
                         )
             except IndexError:  # fails when defined_buckets has only 1 bucket
@@ -879,11 +879,15 @@ class XPlaneFile:
                 len(selective_pairs) % 2 == 0
             ), f"{selective_pairs} not a multiple of two"
 
+            # Shipped scenery and aircraft break spec #3, #5 and #6 (RescueX mixes
+            # modes, the AW139's Fars aren't ascending) and X-Plane still loads
+            # them, so they're warnings and the buckets are written as they are
+
             # LOD spec #5
             # It isn't just having a pairs, they both have to be in meaningful amounts
             # to show mixing
             if len(additive_pairs) > 1 and len(selective_pairs) >= 2:
-                logger.error(
+                logger.warn(
                     f"{self.filename} uses Additive and Selective LODs modes. Choose only one: {[str(lod) for lod in defined_buckets]}"
                 )
 
@@ -898,7 +902,7 @@ class XPlaneFile:
                     )
                 ]
             ):
-                logger.error(
+                logger.warn(
                     f"{self.filename}'s LOD buckets' Far values must be in ascending order: {[(lod) for i, lod in additive_pairs]}"
                 )
             # -----------------------------------------------------------------

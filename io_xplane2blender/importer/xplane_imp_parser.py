@@ -236,6 +236,13 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                 builder.build_cmd(directive, value, location)
             elif directive == "ANIM_trans_end":
                 pass
+            elif directive in {"ANIM_hide", "ANIM_show"} and not all(
+                map(_NUMBER_CHARS.fullmatch, components[:2] or [""])
+            ):
+                # A truncated line, like "ANIM_hide arginal/groundtraffic/speed"
+                logger.warn(
+                    f"Line {lineno}: {directive} has no values, left out. Line was: '{line}'"
+                )
             elif directive in {"ANIM_hide", "ANIM_show"}:
                 v1, v2 = map(float, components[:2])
                 dataref_path = dataref_at(components, 2, lineno, directive)

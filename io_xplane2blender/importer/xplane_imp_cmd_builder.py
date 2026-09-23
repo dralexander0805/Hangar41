@@ -142,6 +142,10 @@ ATTR_STATE_DIRECTIVES = frozenset(
 )
 
 
+# _current_lod while inside an ATTR_LOD that's never drawn (far <= near)
+NEVER_DRAWN_LOD = -1
+
+
 # Directives that place a light or magnet at a point in the current animation frame
 POINT_DIRECTIVES = frozenset({"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "MAGNET"})
 
@@ -706,6 +710,8 @@ class ImpCommandBuilder:
         # (near, far) per ATTR_LOD, and which one TRIS/lights are currently in
         self._lods: List[Tuple[float, float]] = []
         self._current_lod: Optional[int] = None
+        # TRIS and lights left out for being in an LOD that's never drawn
+        self._never_drawn = 0
 
         # Intermediate blocks refer to their parent by a key unique to this
         # import. Blender renames objects whose name is taken (e.g. by an
@@ -770,6 +776,9 @@ class ImpCommandBuilder:
             # idx error etc
             self.vt_table.idxes.extend(args)
         elif directive == "TRIS":
+            if self._current_lod == NEVER_DRAWN_LOD:
+                self._never_drawn += 1
+                return
             start_idx = args[0]
             count = args[1]
             if not self._anim_intermediate_stack:
@@ -1025,8 +1034,12 @@ class ImpCommandBuilder:
             self._add_point_block(directive, args[0], name_hint)
         elif directive == "ATTR_LOD":
             near, far = (float(v) for v in args[0][:2])
-            self._lods.append((near, far))
-            self._current_lod = len(self._lods) - 1
+            if far <= near:
+                # "ATTR_LOD 0 0" (RescueX): X-Plane never draws what's in it
+                self._current_lod = NEVER_DRAWN_LOD
+            else:
+                self._lods.append((near, far))
+                self._current_lod = len(self._lods) - 1
         else:
             assert False, f"{directive} is not supported yet"
 
@@ -1628,6 +1641,12 @@ class ImpCommandBuilder:
                 " point past the vertex table, so X-Plane doesn't draw them either"
             )
 
+        if self._never_drawn:
+            logger.warn(
+                f"Left out {self._never_drawn} TRIS/light(s) in an ATTR_LOD whose far"
+                " isn't beyond its near: X-Plane never draws them"
+            )
+
         if not self.root_collection.all_objects:
             logger.warn(".obj had no real datablocks to create")
             return {"CANCELLED"}
@@ -1749,6 +1768,9 @@ class ImpCommandBuilder:
             rotation = Matrix.Identity(4)
             datablock_type = "LIGHT"
 
+        if self._current_lod == NEVER_DRAWN_LOD:
+            self._never_drawn += 1
+            return
         if not self._anim_intermediate_stack:
             parent = self.root_intermediate_datablock
         else:

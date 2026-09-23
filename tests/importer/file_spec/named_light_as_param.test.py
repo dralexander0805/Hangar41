@@ -18,6 +18,12 @@ OBJ = (
     "LIGHT_PARAM airplane_beacon_sp 0 1 0 1.00 0.00 0.00 0.00 3.00 1.00 0.00 0.00 1.00\n"
     # Laminar's BulkCarrier ship writes a SIZE with a unit; X-Plane reads 2850
     "LIGHT_PARAM spot_params_sp 0 2 0 1.00 0.90 0.80 1.00 2850cd 0.00 -0.50 0.87 0.50\n"
+    # Laminar's 747 gives a directional light no direction
+    "LIGHT_PARAM airplane_generic_core 0 3 0 0 0 0 2 0.4\n"
+    # X-Crafts' librain objects name a param light
+    "LIGHT_NAMED airplane_generic_sp 0 4 0\n"
+    # X-Crafts' ERJ gives fewer params than the bundled lights.txt wants
+    "LIGHT_PARAM airplane_nav_tail_size 0 5 0 0.60\n"
 )
 
 
@@ -31,20 +37,33 @@ class TestNamedLightAsParam(XPlaneTestCase):
         self.assertEqual(
             bpy.ops.export.xplane_obj(filepath=str(out) + os.sep), {"FINISHED"}
         )
-        lights = [
+        lines = [
             line.split()
             for line in next(out.glob("*.obj")).read_text().splitlines()
-            if line.strip().startswith("LIGHT_PARAM")
+            if line.split()
         ]
+        lights = {line[1]: line[5:] for line in lines if line[0] == "LIGHT_PARAM"}
         self.assertEqual(
-            [light[1] for light in lights], ["airplane_beacon_sp", "spot_params_sp"]
+            sorted(lights),
+            [
+                "airplane_beacon_sp",
+                "airplane_generic_core",
+                "airplane_nav_tail_size",
+                "spot_params_sp",
+            ],
         )
         self.assertEqual(
-            [float(x) for x in lights[0][5:]],
+            [float(x) for x in lights["airplane_beacon_sp"]],
             [1, 0, 0, 0, 3, 1, 0, 0, 1],
         )
         # Written as imported
-        self.assertEqual(lights[1][9], "2850cd")
+        self.assertEqual(lights["spot_params_sp"][4], "2850cd")
+        self.assertEqual(lights["airplane_generic_core"], ["0", "0", "0", "2", "0.4"])
+        self.assertEqual(lights["airplane_nav_tail_size"], ["0.60"])
+        self.assertIn(
+            ["LIGHT_NAMED", "airplane_generic_sp"],
+            [line[:2] for line in lines if line[0] == "LIGHT_NAMED"],
+        )
 
 
 runTestCases([TestNamedLightAsParam])

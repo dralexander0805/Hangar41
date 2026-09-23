@@ -235,7 +235,8 @@ def validatePanel(mat: XPlaneMaterial) -> MaterialValidationMsgs:
         errors.append("Must not be draped.")
 
     if mat.options.surfaceType != "none":
-        errors.append('Must have the surface type "none".')
+        # X-Crafts' ERJ cockpit has one; kept so an import still exports
+        warnings.append('Has a surface type while part of the panel.')
 
     return errors, warnings
 
@@ -290,8 +291,10 @@ def validateDraped(mat: XPlaneMaterial) -> MaterialValidationMsgs:
     if mat.options.cockpit_feature == COCKPIT_FEATURE_PANEL:
         errors.append("Must not be part of the cockpit panel.")
 
+    # Shipped scenery has both on draped geometry (DD's KSEA asphalt, the
+    # Handy Objects Library); kept so an import still exports
     if mat.options.surfaceType != "none":
-        errors.append('Must have the surface type "none".')
+        warnings.append("Has a surface type while draped.")
 
     if not mat.options.draw:
         errors.append("Must have draw enabled.")
@@ -300,7 +303,7 @@ def validateDraped(mat: XPlaneMaterial) -> MaterialValidationMsgs:
         errors.append("Must have camera collision disabled.")
 
     if mat.options.poly_os > 0:
-        errors.append("Must not have polygon offset.")
+        warnings.append("Has a polygon offset while draped.")
 
     if mat.blenderObject.xplane.manip.enabled:
         errors.append("Must not be a manipulator.")

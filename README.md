@@ -57,7 +57,7 @@ Every aircraft object in a well-stocked X-Plane 11 and 12 install, plus scenery 
     <td align="center"><h3>168,369</h3>parts, each within 2&nbsp;mm<br>of where X-Plane puts it</td>
     <td align="center"><h3>100M</h3>triangles<br>round-tripped</td>
     <td align="center"><h3>33,842</h3>manipulators<br>kept, all of them</td>
-    <td align="center"><h3>23,000+</h3>lights and<br>magnets kept</td>
+    <td align="center"><h3>24,800+</h3>lights and<br>magnets kept</td>
   </tr>
 </table>
 

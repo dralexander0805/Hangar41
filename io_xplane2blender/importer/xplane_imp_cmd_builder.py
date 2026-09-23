@@ -55,6 +55,12 @@ class ParentInfo:
     parent_type: str = "OBJECT"
     parent_bone: Optional[str] = None
 from io_xplane2blender.xplane_constants import (
+    BLEND_OFF,
+    BLEND_ON,
+    MAX_COCKPIT_REGIONS,
+    BLEND_SHADOW,
+    SURFACE_TYPE_CONCRETE,
+    SURFACE_TYPE_NONE,
     ANIM_TYPE_HIDE,
     ANIM_TYPE_SHOW,
     ANIM_TYPE_TRANSFORM,
@@ -98,6 +104,36 @@ from io_xplane2blender.xplane_helpers import (
     vec_b_to_x,
     vec_x_to_b,
 )
+
+# OBJ attribute state that becomes material settings (see IntermediateAttributes)
+ATTR_STATE_DIRECTIVES = frozenset(
+    {
+        "ATTR_draw_disable",
+        "ATTR_draw_enable",
+        "ATTR_cockpit",
+        "ATTR_cockpit_lit_only",
+        "ATTR_cockpit_region",
+        "ATTR_cockpit_device",
+        "ATTR_no_cockpit",
+        "ATTR_solid_camera",
+        "ATTR_no_solid_camera",
+        "ATTR_shiny_rat",
+        "ATTR_light_level",
+        "ATTR_light_level_reset",
+        "ATTR_blend",
+        "ATTR_no_blend",
+        "ATTR_shadow_blend",
+        "ATTR_shadow",
+        "ATTR_no_shadow",
+        "ATTR_hard",
+        "ATTR_hard_deck",
+        "ATTR_no_hard",
+        "ATTR_poly_os",
+        "ATTR_draped",
+        "ATTR_no_draped",
+    }
+)
+
 
 # is_vector_axis_aligned was removed from xplane_helpers in 4.3.x — define locally.
 def is_vector_axis_aligned(v) -> bool:
@@ -222,6 +258,7 @@ class IntermediateAnimation:
                         idx=current_frame,
                         dataref_path=self.xp_dataref.path,
                         dataref_value=value,
+                        dataref_loop=self.xp_dataref.loop or None,
                         dataref_anim_type=self.xp_dataref.anim_type,
                         location=self.locations[value_idx] + bl_object.location
                         if self.locations
@@ -236,6 +273,7 @@ class IntermediateAnimation:
                         idx=current_frame,
                         dataref_path=self.xp_dataref.path,
                         dataref_value=value,
+                        dataref_loop=self.xp_dataref.loop or None,
                         dataref_anim_type=self.xp_dataref.anim_type,
                         location=None,
                         rotation=recompose_rotation(bl_object.rotation_mode, value_idx)
@@ -343,9 +381,20 @@ class IntermediateAttributes:
     cockpit_mode: str = COCKPIT_FEATURE_NONE
     cockpit_region: int = 0
     cockpit_device_args: Tuple[str, ...] = ()
+    # X-Plane 12 max luminance, the extra parameter of ATTR_cockpit*
+    cockpit_luminance: Optional[int] = None
     solid_camera: bool = False
     shiny_rat: Optional[float] = None
     has_explicit_shiny_rat: bool = False
+    # (v1, v2, dataref, brightness or None) from ATTR_light_level
+    light_level: Optional[Tuple[float, float, str, Optional[int]]] = None
+    blend: str = BLEND_ON
+    blend_ratio: float = 0.5
+    shadow: bool = True
+    surface: str = SURFACE_TYPE_NONE
+    deck: bool = False
+    poly_os: int = 0
+    draped: bool = False
 
     def material_key(self) -> Tuple[Any, ...]:
         return (
@@ -353,9 +402,18 @@ class IntermediateAttributes:
             self.cockpit_mode,
             self.cockpit_region,
             self.cockpit_device_args,
+            self.cockpit_luminance,
             self.solid_camera,
             self.shiny_rat,
             self.has_explicit_shiny_rat,
+            self.light_level,
+            self.blend,
+            self.blend_ratio,
+            self.shadow,
+            self.surface,
+            self.deck,
+            self.poly_os,
+            self.draped,
         )
 
 
@@ -583,7 +641,15 @@ class ImpCommandBuilder:
         self.texture: Optional[Path] = None
         self.texture_lit: Optional[Path] = None
         self.texture_normal: Optional[Path] = None
+        # The file Blender can display for TEXTURE, if one exists (may be the .dds)
+        self.texture_file: Optional[Path] = None
         self.is_cockpit: bool = False
+        self.normal_metalness = False
+        self.blend_glass = False
+        # (left, bottom, right, top) in pixels, from COCKPIT_REGION
+        self.cockpit_regions: List[Tuple[int, int, int, int]] = []
+        # Header lines with no exporter setting, written back verbatim
+        self.custom_header: List[Tuple[str, str]] = []
 
         # Although we don't end up making this, it is useful for tree problems
         self.root_intermediate_datablock = IntermediateDatablock(
@@ -910,18 +976,7 @@ class ImpCommandBuilder:
                 m = self._parse_manip_components(manip_type, c)
                 if m is not None:
                     self._pending_manip = m
-        elif directive in {
-            "ATTR_draw_disable",
-            "ATTR_draw_enable",
-            "ATTR_cockpit",
-            "ATTR_cockpit_lit_only",
-            "ATTR_cockpit_region",
-            "ATTR_cockpit_device",
-            "ATTR_no_cockpit",
-            "ATTR_solid_camera",
-            "ATTR_no_solid_camera",
-            "ATTR_shiny_rat",
-        }:
+        elif directive in ATTR_STATE_DIRECTIVES:
             self._apply_pending_attr(directive, args[0] if args else [])
         else:
             assert False, f"{directive} is not supported yet"
@@ -961,9 +1016,6 @@ class ImpCommandBuilder:
                     intermediate_block.datablock_info.parent_info = None
                 intermediate_parent_info = intermediate_block.datablock_info.parent_info
 
-            print(
-                f"Deciding {intermediate_block.name}" f", parent {intermediate_parent}"
-            )
 
             if intermediate_block_type == "EMPTY":
                 # Remember, we only make empties to store animations so no try needed here
@@ -1021,7 +1073,6 @@ class ImpCommandBuilder:
                             break
                         else:
                             next_name = next_block.name
-                            print("next name ", next_name)
                             next_block_type = next_block.datablock_type
                             next_block_parent = next_block.parent
                             next_show_hide_animations = next_block.show_hide_animations
@@ -1137,7 +1188,6 @@ class ImpCommandBuilder:
 
                                 # TODO: Assumes dataref ranges are the same
                                 def merge_orthogonal_rotation_axis() -> IntermediateDatablock:
-                                    print("merge orthogonal axis")
                                     """
                                     Attempts to merge any mergable rotations of the next_block into
                                     the in_block. Raises ValueError if next_block has nothing to merge.
@@ -1280,7 +1330,6 @@ class ImpCommandBuilder:
                     return (in_block, searching_itr)
 
                 # end def optimize_empty_chain
-                print(f"IN {intermediate_block.name}")
                 out_block, blocks_rem_itr = optimize_empty_chain(
                     intermediate_block, blocks_rem_itr
                 )
@@ -1293,9 +1342,6 @@ class ImpCommandBuilder:
                 #                    out_block.transform_animation.xp_dataref.rotation_values,
                 #                )
 
-                print(
-                    f"OUT {out_block.name}, parent: {out_block.parent}, type: {out_block.datablock_type}"
-                )
             elif intermediate_block_type == "MESH":
                 out_block = intermediate_block
 
@@ -1426,7 +1472,6 @@ class ImpCommandBuilder:
                     if ob_static.parent and out_block.bake_matrix == Matrix.Identity(4):
                         ob_static.matrix_parent_inverse = Matrix.Identity(4)
                     ob_static.matrix_local = out_block.bake_matrix.copy()
-                    bpy.context.view_layer.update()
                     ob_static.rotation_mode = out_block.rotation_mode
 
                     dynamic_info = DatablockInfo(
@@ -1439,7 +1484,6 @@ class ImpCommandBuilder:
                     ob_dyn.name = self._display_name(out_block)
                     ob_dyn.matrix_parent_inverse = Matrix.Identity(4)
                     ob_dyn.matrix_local = Matrix.Identity(4)
-                    bpy.context.view_layer.update()
                     ob_dyn.rotation_mode = out_block.rotation_mode
                     try:
                         out_block.transform_animation.apply_animation(ob_dyn)
@@ -1482,7 +1526,6 @@ class ImpCommandBuilder:
                 if ob.parent and out_block.bake_matrix == Matrix.Identity(4):
                     ob.matrix_parent_inverse = Matrix.Identity(4)
                 ob.matrix_local = out_block.bake_matrix.copy()
-                bpy.context.view_layer.update()
 
                 ob.rotation_mode = out_block.rotation_mode
 
@@ -1523,6 +1566,13 @@ class ImpCommandBuilder:
             layer.texture_lit = str(self.texture_lit)
         if self.texture_normal:
             layer.texture_normal = str(self.texture_normal)
+        layer.normal_metalness = self.normal_metalness
+        layer.blend_glass = self.blend_glass
+        self._apply_cockpit_regions(layer)
+        for name, value in self.custom_header:
+            attr = layer.customAttributes.add()
+            attr.name = name
+            attr.value = value
 
         return {"FINISHED"}
 
@@ -1574,6 +1624,62 @@ class ImpCommandBuilder:
         self._objects_by_key[info.name] = ob
         return ob
 
+    def set_texture(self, directive: str, named: Path, found: Optional[Path]) -> None:
+        attr = {
+            "TEXTURE": "texture",
+            "TEXTURE_LIT": "texture_lit",
+            "TEXTURE_NORMAL": "texture_normal",
+        }[directive]
+        setattr(self, attr, named)
+        if directive == "TEXTURE":
+            self.texture_file = found
+
+    def set_header_state(self, directive: str, c: List[str]) -> None:
+        """Header directives that map to a layer setting or starting attribute state"""
+
+        def number(i: int, default: float) -> float:
+            try:
+                return float(c[i])
+            except (IndexError, ValueError):
+                return default
+
+        attrs = self._pending_attrs
+        if directive == "NORMAL_METALNESS":
+            self.normal_metalness = True
+        elif directive == "BLEND_GLASS":
+            self.blend_glass = True
+        elif directive == "COCKPIT_REGION":
+            try:
+                self.cockpit_regions.append(tuple(int(v) for v in c[:4]))
+            except ValueError:
+                logger.warn(f"COCKPIT_REGION: expected 4 pixel values, got '{' '.join(c)}'")
+        elif directive == "GLOBAL_specular":
+            # Same as every TRIS starting with ATTR_shiny_rat <v>
+            attrs.shiny_rat = number(0, 1.0)
+            attrs.has_explicit_shiny_rat = True
+        elif directive in {"GLOBAL_no_blend", "GLOBAL_shadow_blend"}:
+            attrs.blend = BLEND_OFF if directive == "GLOBAL_no_blend" else BLEND_SHADOW
+            attrs.blend_ratio = number(0, 0.5)
+        elif directive == "GLOBAL_no_shadow":
+            attrs.shadow = False
+
+    def _apply_cockpit_regions(self, layer) -> None:
+        regions = self.cockpit_regions[:MAX_COCKPIT_REGIONS]
+        if not regions:
+            return
+        layer.cockpit_regions = str(len(regions))
+        for i, (left, bottom, right, top) in enumerate(regions):
+            region = layer.cockpit_region[i]
+            region.left, region.top = left, bottom  # "top" is really the bottom
+            # Stored as powers of two, which is all X-Plane allows anyway
+            region.width = max(1, round(math.log2(max(1, right - left))))
+            region.height = max(1, round(math.log2(max(1, top - bottom))))
+        if len(self.cockpit_regions) > MAX_COCKPIT_REGIONS:
+            logger.warn(
+                f"OBJ has {len(self.cockpit_regions)} COCKPIT_REGIONs; only the first"
+                f" {MAX_COCKPIT_REGIONS} were imported"
+            )
+
     def _resolve_parent(self, parent: Union[str, bpy.types.Object, None]) -> Optional[bpy.types.Object]:
         if isinstance(parent, bpy.types.Object):
             return parent
@@ -1618,6 +1724,12 @@ class ImpCommandBuilder:
     def _apply_pending_attr(self, directive: str, c: List[str]) -> None:
         attrs = self._pending_attrs
 
+        def number(i: int, cast=float, default=None):
+            try:
+                return cast(c[i])
+            except (IndexError, ValueError):
+                return default
+
         if directive == "ATTR_draw_disable":
             attrs.draw = False
         elif directive == "ATTR_draw_enable":
@@ -1626,43 +1738,73 @@ class ImpCommandBuilder:
             attrs.cockpit_mode = COCKPIT_FEATURE_NONE
             attrs.cockpit_region = 0
             attrs.cockpit_device_args = ()
-        elif directive == "ATTR_cockpit":
-            attrs.cockpit_mode = PANEL_COCKPIT
+            attrs.cockpit_luminance = None
+        elif directive in {"ATTR_cockpit", "ATTR_cockpit_lit_only"}:
+            mode = PANEL_COCKPIT if directive == "ATTR_cockpit" else PANEL_COCKPIT_LIT_ONLY
+            attrs.cockpit_mode = mode
             attrs.cockpit_region = 0
             attrs.cockpit_device_args = ()
-            self._set_cockpit_panel_mode(PANEL_COCKPIT)
-        elif directive == "ATTR_cockpit_lit_only":
-            attrs.cockpit_mode = PANEL_COCKPIT_LIT_ONLY
-            attrs.cockpit_region = 0
-            attrs.cockpit_device_args = ()
-            self._set_cockpit_panel_mode(PANEL_COCKPIT_LIT_ONLY)
+            attrs.cockpit_luminance = number(0, int)
+            self._set_cockpit_panel_mode(mode)
         elif directive == "ATTR_cockpit_region":
             attrs.cockpit_mode = PANEL_COCKPIT_REGION
-            try:
-                attrs.cockpit_region = int(c[0])
-            except (IndexError, ValueError):
-                attrs.cockpit_region = 0
+            attrs.cockpit_region = number(0, int, 0)
             attrs.cockpit_device_args = ()
+            attrs.cockpit_luminance = number(1, int)
             self._set_cockpit_panel_mode(PANEL_COCKPIT_REGION)
         elif directive == "ATTR_cockpit_device":
             attrs.cockpit_mode = COCKPIT_FEATURE_DEVICE
             attrs.cockpit_region = 0
-            attrs.cockpit_device_args = tuple(c)
+            attrs.cockpit_device_args = tuple(c[:4])
+            attrs.cockpit_luminance = number(4, int)
         elif directive == "ATTR_solid_camera":
             attrs.solid_camera = True
         elif directive == "ATTR_no_solid_camera":
             attrs.solid_camera = False
         elif directive == "ATTR_shiny_rat":
-            try:
-                attrs.shiny_rat = float(c[0])
-            except (IndexError, ValueError):
+            shiny_rat = number(0)
+            if shiny_rat is None:
                 logger.warn("ATTR_shiny_rat: could not parse value")
                 return
+            attrs.shiny_rat = shiny_rat
             attrs.has_explicit_shiny_rat = True
+        elif directive == "ATTR_light_level":
+            v1, v2 = number(0), number(1)
+            if v1 is None or v2 is None or len(c) < 3:
+                logger.warn(f"ATTR_light_level: expected 'v1 v2 dataref', got '{' '.join(c)}'")
+                return
+            attrs.light_level = (v1, v2, c[2], number(3, int))
+        elif directive == "ATTR_light_level_reset":
+            attrs.light_level = None
+        elif directive == "ATTR_blend":
+            attrs.blend = BLEND_ON
+        elif directive in {"ATTR_no_blend", "ATTR_shadow_blend"}:
+            attrs.blend = BLEND_OFF if directive == "ATTR_no_blend" else BLEND_SHADOW
+            attrs.blend_ratio = number(0, float, 0.5)
+        elif directive == "ATTR_shadow":
+            attrs.shadow = True
+        elif directive == "ATTR_no_shadow":
+            attrs.shadow = False
+        elif directive in {"ATTR_hard", "ATTR_hard_deck"}:
+            attrs.surface = c[0] if c else SURFACE_TYPE_CONCRETE
+            attrs.deck = directive == "ATTR_hard_deck"
+        elif directive == "ATTR_no_hard":
+            attrs.surface = SURFACE_TYPE_NONE
+            attrs.deck = False
+        elif directive == "ATTR_poly_os":
+            attrs.poly_os = number(0, int, 0)
+        elif directive == "ATTR_draped":
+            attrs.draped = True
+        elif directive == "ATTR_no_draped":
+            attrs.draped = False
 
     def _set_cockpit_panel_mode(self, mode: str) -> None:
-        if self._cockpit_panel_mode is None:
-            self._cockpit_panel_mode = mode
+        # ATTR_cockpit mixed with ATTR_cockpit_region is common (whole panel plus
+        # regions). Regions mode exports both, so it wins over plain cockpit.
+        region_mix = {self._cockpit_panel_mode, mode} == {PANEL_COCKPIT, PANEL_COCKPIT_REGION}
+        if self._cockpit_panel_mode is None or region_mix:
+            if self._cockpit_panel_mode != PANEL_COCKPIT_REGION:
+                self._cockpit_panel_mode = mode
         elif self._cockpit_panel_mode != mode:
             logger.warn(
                 "OBJ uses mixed cockpit panel attribute modes; "
@@ -1689,6 +1831,7 @@ class ImpCommandBuilder:
             f"ImportedMaterial.{len(self._materials_by_attr_key):03}"
         )
         material.use_nodes = True
+        self._add_texture_nodes(material)
         material.xplane.draw = attrs.draw
         material.xplane.solid_camera = attrs.solid_camera
         material["xplane_imp_suppress_default_shiny_rat"] = (
@@ -1714,8 +1857,60 @@ class ImpCommandBuilder:
         else:
             material.xplane.cockpit_feature = COCKPIT_FEATURE_NONE
 
+        if attrs.cockpit_luminance is not None:
+            material.xplane.cockpit_feature_use_luminance = True
+            material.xplane.cockpit_feature_luminance = attrs.cockpit_luminance
+
+        if attrs.light_level:
+            v1, v2, dataref, brightness = attrs.light_level
+            material.xplane.lightLevel = True
+            material.xplane.lightLevel_v1 = v1
+            material.xplane.lightLevel_v2 = v2
+            material.xplane.lightLevel_dataref = dataref
+            if brightness is not None:
+                material.xplane.lightLevel_photometric = True
+                material.xplane.lightLevel_brightness = brightness
+
+        material.xplane.blend_v1000 = attrs.blend
+        material.xplane.blendRatio = attrs.blend_ratio
+        material.xplane.shadow_local = attrs.shadow
+        try:
+            material.xplane.surfaceType = attrs.surface
+        except TypeError:
+            logger.warn(f"Unknown ATTR_hard surface '{attrs.surface}', imported as concrete")
+            material.xplane.surfaceType = SURFACE_TYPE_CONCRETE
+        material.xplane.deck = attrs.deck
+        material.xplane.poly_os = attrs.poly_os
+        material.xplane.draped = attrs.draped
+
         self._materials_by_attr_key[key] = material
         return material
+
+    def _add_texture_nodes(self, material: bpy.types.Material) -> None:
+        """
+        Shows the OBJ's TEXTURE in the viewport. Display only: the exporter
+        writes the texture from the collection's X-Plane settings, not nodes.
+        """
+        if not self.texture_file:
+            return
+        try:
+            image = bpy.data.images.load(str(self.texture_file), check_existing=True)
+        except RuntimeError as e:
+            logger.warn(f"Blender couldn't load '{self.texture_file}' for display: {e}")
+            self.texture_file = None
+            return
+        nodes = material.node_tree.nodes
+        bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is None:
+            return
+        tex = nodes.new("ShaderNodeTexImage")
+        tex.image = image
+        tex.location = (bsdf.location.x - 320, bsdf.location.y)
+        links = material.node_tree.links
+        links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        # Cutouts (grilles, labels) need alpha; hashed avoids sorting problems
+        material.blend_method = "HASHED"
 
     def _apply_cockpit_device_args(
         self, material: bpy.types.Material, args: Tuple[str, ...]

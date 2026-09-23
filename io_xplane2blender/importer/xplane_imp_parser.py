@@ -19,7 +19,11 @@ import bmesh
 import bpy
 from mathutils import Euler, Vector
 
-from io_xplane2blender.importer.xplane_imp_cmd_builder import VT, ImpCommandBuilder
+from io_xplane2blender.importer.xplane_imp_cmd_builder import (
+    ATTR_STATE_DIRECTIVES,
+    VT,
+    ImpCommandBuilder,
+)
 from io_xplane2blender.tests import test_creation_helpers
 from io_xplane2blender.xplane_constants import (
     ANIM_TYPE_HIDE,
@@ -84,9 +88,11 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             )
             return "none"
 
-    last_axis = None
     name_hint = ""
     skip = False
+    # Everything before POINT_COUNTS is the header
+    in_header = True
+    unsupported: Dict[str, int] = collections.Counter()
     # start=4 so lineno matches what a text editor shows
     for lineno, line in enumerate(map(str.strip, lines[3:]), start=4):
         to_parse, comment = re.match(pattern, line).groups()[0:2]
@@ -111,7 +117,8 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
         if skip:
             continue
 
-        # print(lineno, directive, components)
+        if in_header and directive in {"VT", "IDX", "IDX10", "TRIS", "ANIM_begin", "LINES"}:
+            in_header = False  # POINT_COUNTS was missing
 
         try:
             # TODO: Rewrite using giant switch-ish table and functions so it is more neat
@@ -144,35 +151,19 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             # def _try to swallow all exceptions if the only thing that should happen is the line getting ignored on bad data. Otherwise we can go into more crazy exception hanlding cases
             if directive in {"GLOBAL_cockpit", "GLOBAL_cockpit_lit"}:
                 builder.is_cockpit = True
-            elif directive == "TEXTURE":
-                try:
-                    texture_path = (filepath.parent / Path(components[0])).resolve()
-                except IndexError:
-                    logger.warn(f"Line {lineno}: TEXTURE has no file name, ignored")
-                else:
-                    if texture_path.exists():
-                        builder.texture = texture_path
-                    else:
-                        logger.warn(
-                            f"Texture '{texture_path}' not found, importing without it."
-                            " Paths are relative to the .obj's folder"
-                        )
-            elif directive == "TEXTURE_LIT":
-                try:
-                    texture_lit_path = (filepath.parent / Path(components[0])).resolve()
-                except IndexError:
-                    pass
-                else:
-                    if texture_lit_path.exists():
-                        builder.texture_lit = texture_lit_path
-            elif directive == "TEXTURE_NORMAL":
-                try:
-                    texture_normal_path = (filepath.parent / Path(components[0])).resolve()
-                except IndexError:
-                    pass
-                else:
-                    if texture_normal_path.exists():
-                        builder.texture_normal = texture_normal_path
+            elif directive in {"TEXTURE", "TEXTURE_LIT", "TEXTURE_NORMAL"}:
+                # A bare "TEXTURE" means untextured; nothing to keep
+                if components:
+                    named, found = _find_texture(filepath, components[0], directive)
+                    builder.set_texture(directive, named, found)
+            elif directive == "POINT_COUNTS":
+                in_header = False
+            elif in_header and directive in HEADER_STATE:
+                builder.set_header_state(directive, components)
+            elif in_header and directive not in {"A", "I"}:
+                # Header lines the exporter has no setting for (TEXTURE_MODULATOR,
+                # decals, GLOBAL_luminance, ...) are carried through verbatim
+                builder.custom_header.append((directive, " ".join(components)))
             elif directive == "VT":
                 components[:3] = vec_x_to_b(list(map(float, components[:3])))
                 components[3:6] = vec_x_to_b(list(map(float, components[3:6])))
@@ -271,22 +262,10 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                     # cockpit OBJs have no GLOBAL_cockpit_lit to tell us.
                     builder.is_cockpit = True
                 builder.build_cmd(directive, components)
-            elif directive in {
-                "ATTR_draw_disable",
-                "ATTR_draw_enable",
-                "ATTR_cockpit",
-                "ATTR_cockpit_lit_only",
-                "ATTR_cockpit_region",
-                "ATTR_cockpit_device",
-                "ATTR_no_cockpit",
-                "ATTR_solid_camera",
-                "ATTR_no_solid_camera",
-                "ATTR_shiny_rat",
-            }:
+            elif directive in ATTR_STATE_DIRECTIVES:
                 builder.build_cmd(directive, components)
             else:
-                # print(f"{directive} is not implemted yet")
-                pass
+                unsupported[directive] += 1
         except UnrecoverableParserError:
             raise
         except (IndexError, ValueError, TypeError) as e:
@@ -300,5 +279,46 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             logger.error(msg)
             raise UnrecoverableParserError(msg) from e
 
+    if unsupported:
+        logger.warn(
+            "Not imported, so these will be missing from an export: "
+            + ", ".join(f"{d} x{n}" for d, n in unsupported.most_common())
+        )
+
     builder.finalize_intermediate_blocks()
     return "FINISHED"
+
+
+# Header directives that set the starting attribute state, or map to an
+# exporter setting, rather than being carried through verbatim
+HEADER_STATE = {
+    "NORMAL_METALNESS",
+    "BLEND_GLASS",
+    "COCKPIT_REGION",
+    "GLOBAL_specular",
+    "GLOBAL_no_blend",
+    "GLOBAL_shadow_blend",
+    "GLOBAL_no_shadow",
+}
+
+
+def _find_texture(
+    obj_path: Path, name: str, directive: str
+) -> Tuple[Path, Optional[Path]]:
+    """
+    Returns the texture path as the OBJ names it (what an export should write)
+    and a file that exists for Blender to display, or None. X-Plane loads the
+    .dds when the named .png is missing (and vice versa), so we do too.
+    """
+    named = (obj_path.parent / Path(name)).resolve()
+    candidates = [named] + [
+        named.with_suffix(ext) for ext in (".dds", ".png") if ext != named.suffix.lower()
+    ]
+    found = next((p for p in candidates if p.exists()), None)
+    if found is None:
+        logger.warn(
+            f"{directive} '{named}' not found (also tried .dds/.png). The export"
+            " keeps the path, but Blender can't show it. Paths are relative to"
+            " the .obj's folder"
+        )
+    return named, found

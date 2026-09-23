@@ -192,10 +192,12 @@ def scene_layout(layout: bpy.types.UILayout, scene: bpy.types.Scene):
         and xp2b_ver.build_number != xplane_constants.BUILD_NUMBER_NONE
     ):
         layout.row().label(
-            text="XPlane2Blender Version: " + str(xp2b_ver), icon="FILE_TICK"
+            text="Hangar41 " + str(xp2b_ver).split("+")[0], icon="FILE_TICK"
         )
     else:
-        layout.row().label(text="XPlane2Blender Version: " + str(xp2b_ver), icon="NONE")
+        # The "+<data model>.<build number>" suffix only means something to developers
+        shown = str(xp2b_ver) if scene.xplane.plugin_development else str(xp2b_ver).split("+")[0]
+        layout.row().label(text="Hangar41 " + shown, icon="NONE")
 
     if xp2b_ver.build_type in {
         xplane_constants.BUILD_TYPE_ALPHA,

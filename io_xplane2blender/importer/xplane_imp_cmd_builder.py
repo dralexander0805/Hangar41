@@ -442,8 +442,11 @@ class IntermediateDatablock:
 
             return ob
         else:
-            logger.error(
-                f"Mesh was not valid, object '{self.name}' not made, check console for more"
+            bpy.data.meshes.remove(me)
+            logger.warn(
+                f"Skipped mesh '{self.name}' (TRIS {self.start_idx} {self.count}):"
+                " its triangles are invalid, e.g. degenerate or duplicate faces."
+                " The rest of the object was imported"
             )
             raise ValueError
 

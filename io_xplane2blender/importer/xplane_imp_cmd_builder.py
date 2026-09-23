@@ -57,6 +57,10 @@ class ParentInfo:
 from io_xplane2blender.xplane_constants import (
     BLEND_OFF,
     BLEND_ON,
+    EMPTY_USAGE_MAGNET,
+    LIGHT_CUSTOM,
+    LIGHT_NAMED,
+    LIGHT_PARAM,
     MAX_COCKPIT_REGIONS,
     BLEND_SHADOW,
     SURFACE_TYPE_CONCRETE,
@@ -133,6 +137,10 @@ ATTR_STATE_DIRECTIVES = frozenset(
         "ATTR_no_draped",
     }
 )
+
+
+# Directives that place a light or magnet at a point in the current animation frame
+POINT_DIRECTIVES = frozenset({"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "MAGNET"})
 
 
 # is_vector_axis_aligned was removed from xplane_helpers in 4.3.x — define locally.
@@ -440,6 +448,8 @@ class IntermediateDatablock:
     children: List["IntermediateDatablock"] = field(default_factory=list)
     manip: Optional["IntermediateManipulator"] = None
     attrs: Optional[IntermediateAttributes] = None
+    # For LIGHT and MAGNET blocks: the directive and its parsed fields
+    point: Optional[Tuple[str, Dict[str, Any]]] = None
 
     def build_mesh(
         self,
@@ -978,6 +988,8 @@ class ImpCommandBuilder:
                     self._pending_manip = m
         elif directive in ATTR_STATE_DIRECTIVES:
             self._apply_pending_attr(directive, args[0] if args else [])
+        elif directive in POINT_DIRECTIVES:
+            self._add_point_block(directive, args[0], name_hint)
         else:
             assert False, f"{directive} is not supported yet"
 
@@ -1088,7 +1100,10 @@ class ImpCommandBuilder:
                                 is_next_block_loc_anim = False
                                 is_next_block_rot_anim = False
 
-                            if next_block_type == "MESH":
+                            if next_block_type in {"LIGHT", "MAGNET"}:
+                                # Never folded into; the outer loop creates them
+                                return (in_block, searching_itr)
+                            elif next_block_type == "MESH":
                                 # Only collapse EMPTY→MESH when the EMPTY has an identity
                                 # bake_matrix AND a single mesh child. Non-identity bake_matrix
                                 # means the EMPTY carries a static pre-transform that must be
@@ -1362,7 +1377,7 @@ class ImpCommandBuilder:
                 #                    out_block.transform_animation.xp_dataref.rotation_values,
                 #                )
 
-            elif intermediate_block_type == "MESH":
+            elif intermediate_block_type in {"MESH", "LIGHT", "MAGNET"}:
                 out_block = intermediate_block
 
             def fill_in_eulers(
@@ -1518,6 +1533,9 @@ class ImpCommandBuilder:
                 else:
                     ob = self._create_empty(out_block.datablock_info)
                     ob.name = self._display_name(out_block)
+            elif out_block.datablock_type in {"LIGHT", "MAGNET"}:
+                ob = self._create_point_object(out_block)
+                ob.name = self._display_name(out_block)
             elif out_block.datablock_type == "MESH":
                 try:
                     ob = out_block.build_mesh(self.vt_table, self._resolve_parent)
@@ -1646,6 +1664,107 @@ class ImpCommandBuilder:
         self._objects_by_key[info.name] = ob
         return ob
 
+    def _add_point_block(self, directive: str, c: List[str], name_hint: str) -> None:
+        """
+        LIGHT_NAMED <name> x y z, LIGHT_PARAM <name> x y z <params...>,
+        LIGHT_CUSTOM x y z r g b a s s1 t1 s2 t2 <dataref>,
+        MAGNET <debug name> <type> x y z <yaw> <pitch> <roll>.
+        Raises ValueError/IndexError on malformed lines (the parser reports them).
+        """
+        if directive == "MAGNET":
+            if len(c) < 8:
+                raise IndexError
+            *name_parts, magnet_type = c[:-6]
+            x, y, z, yaw, pitch, roll = map(float, c[-6:])
+            # Inverse of what the exporter writes: yaw=-euler.z, pitch=euler.x, roll=euler.y
+            rotation = Euler(
+                (math.radians(pitch), math.radians(roll), math.radians(-yaw)), "XYZ"
+            ).to_matrix().to_4x4()
+            fields = {"name": " ".join(name_parts), "type": magnet_type}
+            datablock_type = "MAGNET"
+            # Magnets only exist in cockpit objects
+            self.is_cockpit = True
+        elif directive == "LIGHT_CUSTOM":
+            x, y, z = map(float, c[0:3])
+            rgba_size_uv = [float(v) for v in c[3:12]]
+            if len(rgba_size_uv) < 9:
+                raise IndexError
+            fields = {"values": rgba_size_uv, "dataref": c[12] if len(c) > 12 else ""}
+            rotation = Matrix.Identity(4)
+            datablock_type = "LIGHT"
+        else:
+            x, y, z = map(float, c[1:4])
+            fields = {"name": c[0], "params": " ".join(c[4:])}
+            rotation = Matrix.Identity(4)
+            datablock_type = "LIGHT"
+
+        if not self._anim_intermediate_stack:
+            parent = self.root_intermediate_datablock
+        else:
+            parent = self._anim_intermediate_stack[-1].intermediate_datablock
+        block = IntermediateDatablock(
+            datablock_info=DatablockInfo(
+                datablock_type=datablock_type,
+                name=self._new_key(name_hint, fields.get("name") or directive),
+                parent_info=ParentInfo(parent.datablock_info.name),
+                collection=self.root_collection,
+            ),
+            start_idx=None,
+            count=None,
+            transform_animation=None,
+            show_hide_animations=[],
+            bake_matrix=self._bake_matrix_stack[-1]
+            @ Matrix.Translation(vec_x_to_b((x, y, z)))
+            @ rotation,
+        )
+        block.point = (directive, fields)
+        self._blocks.append(block)
+        parent.children.append(block)
+
+    def _create_point_object(self, block: IntermediateDatablock) -> bpy.types.Object:
+        directive, fields = block.point
+        name = block.name
+        if directive == "MAGNET":
+            ob = bpy.data.objects.new(name, None)
+            ob.empty_display_type = "ARROWS"
+            ob.empty_display_size = 0.05
+            props = ob.xplane.special_empty_props
+            props.special_type = EMPTY_USAGE_MAGNET
+            props.magnet_props.debug_name = fields["name"]
+            kinds = set(fields["type"].split("|"))
+            props.magnet_props.magnet_type_is_xpad = "xpad" in kinds
+            props.magnet_props.magnet_type_is_flashlight = "flashlight" in kinds
+        else:
+            light = bpy.data.lights.new(name, "POINT")
+            # A Point light keeps the exporter from adding direction-correcting
+            # rotations: the OBJ's light already points where it should
+            if directive == "LIGHT_NAMED":
+                light.xplane.type = LIGHT_NAMED
+                light.xplane.name = fields["name"]
+            elif directive == "LIGHT_PARAM":
+                light.xplane.type = LIGHT_PARAM
+                light.xplane.name = fields["name"]
+                light.xplane.params = fields["params"]
+            else:
+                r, g, b, a, size, s1, t1, s2, t2 = fields["values"]
+                light.xplane.type = LIGHT_CUSTOM
+                # Override, since custom light colors may be outside 0-1
+                light.xplane.enable_rgb_override = True
+                light.xplane.rgb_override_values = (r, g, b)
+                light.energy = a
+                light.xplane.size = size
+                light.xplane.uv = (s1, t1, s2, t2)
+                light.xplane.dataref = fields["dataref"]
+            ob = bpy.data.objects.new(name, light)
+        test_creation_helpers.set_collection(ob, block.datablock_info.collection)
+        parent_info = block.datablock_info.parent_info
+        if parent_info is not None:
+            parent_ob = self._resolve_parent(parent_info.parent)
+            if parent_ob is not None:
+                ob.parent = parent_ob
+        self._objects_by_key[name] = ob
+        return ob
+
     def set_texture(self, directive: str, named: Path, found: Optional[Path]) -> None:
         attr = {
             "TEXTURE": "texture",
@@ -1727,6 +1846,9 @@ class ImpCommandBuilder:
         """
         if block.name in self._hint_by_key:
             return self._hint_by_key[block.name]
+        if block.point:
+            directive, fields = block.point
+            return fields.get("name") or ("CustomLight" if directive == "LIGHT_CUSTOM" else directive)
 
         def last_part(path: str) -> str:
             return path.replace("CMND=", "").rstrip("/").rsplit("/", 1)[-1]

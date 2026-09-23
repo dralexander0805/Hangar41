@@ -21,6 +21,7 @@ from mathutils import Euler, Vector
 
 from io_xplane2blender.importer.xplane_imp_cmd_builder import (
     ATTR_STATE_DIRECTIVES,
+    POINT_DIRECTIVES,
     VT,
     ImpCommandBuilder,
 )
@@ -264,6 +265,9 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                 builder.build_cmd(directive, components)
             elif directive in ATTR_STATE_DIRECTIVES:
                 builder.build_cmd(directive, components)
+            elif directive in POINT_DIRECTIVES:
+                builder.build_cmd(directive, components, name_hint=name_hint)
+                name_hint = ""
             else:
                 unsupported[directive] += 1
         except UnrecoverableParserError:

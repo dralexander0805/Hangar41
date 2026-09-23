@@ -50,7 +50,6 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
     - Raise an UnrecoverableParserError showing no results can be trusted
     """
     filepath = pathlib.Path(filepath)
-    builder = ImpCommandBuilder(filepath)
     try:
         # utf-8-sig strips a BOM if present. Some tools write non-UTF-8 bytes
         # into comments; replace them rather than refusing the whole file.
@@ -72,30 +71,18 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
         logger.error(msg)
         raise UnrecoverableParserError(msg)
 
-    directives_white = {
-        "VT",
-        "IDX",
-        "IDX10",
-        "TRIS",
-        "ANIM_begin",
-        "ANIM_end",
-        "ANIM_trans_begin",
-        "ANIM_trans_key",
-        "ANIM_trans_end",
-        "ANIM_rotate_begin",
-        "ANIM_rotate_key",
-        "ANIM_rotate_end",
-        "ANIM_keyframe_loop",
-    }
-
-    # TODO: This should be made later. We should start with our tree of intermediate structures then eventually make that into bpy structs when we know what is valid.
-    # Otherwise, consider this a hack
-    root_col = test_creation_helpers.create_datablock_collection(
-        pathlib.Path(filepath).stem
-    )
-    root_col.xplane.is_exportable_collection = True
-
+    builder = ImpCommandBuilder(filepath)
     pattern = re.compile("([^#]*)(#.*)?")
+
+    def dataref_at(components: List[str], i: int, lineno: int, directive: str) -> str:
+        """X-Plane accepts an animation with no dataref (it never moves); so do we"""
+        try:
+            return components[i]
+        except IndexError:
+            logger.warn(
+                f"Line {lineno}: {directive} has no dataref, imported as 'none'"
+            )
+            return "none"
 
     last_axis = None
     name_hint = ""
@@ -221,7 +208,7 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             elif directive == "ANIM_end":
                 builder.build_cmd("ANIM_end")
             elif directive == "ANIM_trans_begin":
-                dataref_path = components[0]
+                dataref_path = dataref_at(components, 0, lineno, directive)
                 builder.build_cmd("ANIM_trans_begin", dataref_path, name_hint=name_hint)
             elif directive == "ANIM_trans_key":
                 value = float(components[0])
@@ -231,11 +218,11 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                 pass
             elif directive in {"ANIM_hide", "ANIM_show"}:
                 v1, v2 = map(float, components[:2])
-                dataref_path = components[2]
+                dataref_path = dataref_at(components, 2, lineno, directive)
                 builder.build_cmd(directive, v1, v2, dataref_path)
             elif directive == "ANIM_rotate_begin":
                 axis = vec_x_to_b(list(map(float, components[0:3])))
-                dataref_path = components[3]
+                dataref_path = dataref_at(components, 3, lineno, directive)
                 builder.build_cmd(directive, axis, dataref_path, name_hint=name_hint)
             elif directive == "ANIM_rotate_key":
                 value = float(components[0])

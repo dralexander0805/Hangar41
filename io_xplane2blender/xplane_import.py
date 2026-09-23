@@ -36,6 +36,21 @@ class XPLANE_MT_xplane_import_log(bpy.types.Menu):
     pass
 
 
+_IMPORTED_DATA = ("objects", "meshes", "materials", "actions", "collections", "images")
+
+
+def _snapshot_datablocks():
+    return {kind: set(getattr(bpy.data, kind)) for kind in _IMPORTED_DATA}
+
+
+def _remove_new_datablocks(before) -> None:
+    """Undo a failed import so it doesn't leave a half-built object in the scene"""
+    for kind in _IMPORTED_DATA:
+        collection = getattr(bpy.data, kind)
+        for datablock in set(collection) - before[kind]:
+            collection.remove(datablock)
+
+
 class IMPORT_OT_ImportXPlane(bpy.types.Operator, ImportHelper):
     """Import X-Plane Object file format (.obj)"""
 
@@ -57,14 +72,17 @@ class IMPORT_OT_ImportXPlane(bpy.types.Operator, ImportHelper):
         logger.clear()
         logger.addTransport(logger.InternalTextTransport(log_name))
         logger.addTransport(logger.ConsoleTransport())
+        before = _snapshot_datablocks()
         try:
             xplane_imp_parser.import_obj(self.filepath)
         except xplane_imp_parser.UnrecoverableParserError as e:
+            _remove_new_datablocks(before)
             self.report({"ERROR"}, str(e))
             return {"CANCELLED"}
         except Exception as e:
             # A bug in the importer rather than a problem the user can fix.
             logger.error(traceback.format_exc())
+            _remove_new_datablocks(before)
             self.report(
                 {"ERROR"},
                 f"Importing '{filename}' failed unexpectedly ({type(e).__name__}: {e})."

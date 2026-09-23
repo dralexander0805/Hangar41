@@ -383,7 +383,11 @@ class IntermediateDatablock:
     manip: Optional["IntermediateManipulator"] = None
     attrs: Optional[IntermediateAttributes] = None
 
-    def build_mesh(self, vt_table: "VTTable") -> bpy.types.Mesh:
+    def build_mesh(
+        self,
+        vt_table: "VTTable",
+        resolve_parent: Callable[[Any], Optional[bpy.types.Object]],
+    ) -> bpy.types.Object:
         """
         Builds a mesh from the OBJ's VT Table, raises ValueError if
         an object with that mesh couldn't be built
@@ -446,17 +450,14 @@ class IntermediateDatablock:
             me.update(calc_edges=True)
             # 4.3.x create_datablock_mesh no longer accepts a pre-built Mesh
             # object, so create the Blender object directly.
-            if self.datablock_info.parent_info is not None and isinstance(
-                self.datablock_info.parent_info.parent, str
-            ):
-                resolved = bpy.data.objects.get(self.datablock_info.parent_info.parent)
-                if resolved is not None:
-                    self.datablock_info.parent_info.parent = resolved
             ob = bpy.data.objects.new(self.name, object_data=me)
             test_creation_helpers.set_collection(ob, self.datablock_info.collection)
-            ob.name = self.datablock_info.name if self.datablock_info.name is not None else ob.name
-            if self.datablock_info.parent_info:
-                test_creation_helpers.set_parent(ob, self.datablock_info.parent_info)
+            parent_info = self.datablock_info.parent_info
+            if parent_info is not None:
+                parent_ob = resolve_parent(parent_info.parent)
+                if parent_ob is not None:
+                    ob.parent = parent_ob
+                    ob.parent_type = parent_info.parent_type
             if not ob.data.uv_layers:
                 ob.data.uv_layers.new()
 
@@ -572,9 +573,10 @@ class _AnimIntermediateStackEntry:
 
 class ImpCommandBuilder:
     def __init__(self, filepath: Path):
-        self.root_collection = test_creation_helpers.create_datablock_collection(
-            pathlib.Path(filepath).stem
-        )
+        # Always a new collection, so importing the same file twice doesn't
+        # merge the second copy into the first (Blender picks a unique name)
+        self.root_collection = bpy.data.collections.new(pathlib.Path(filepath).stem)
+        bpy.context.scene.collection.children.link(self.root_collection)
 
         self.root_collection.xplane.is_exportable_collection = True
         self.vt_table = VTTable([], [])
@@ -612,6 +614,14 @@ class ImpCommandBuilder:
         self._cockpit_panel_mode: Optional[str] = None
         self._skipped_faces = 0
         self._meshes_with_skipped_faces = 0
+
+        # Intermediate blocks refer to their parent by a key unique to this
+        # import. Blender renames objects whose name is taken (e.g. by an
+        # earlier import), so parents are found through this map, never by
+        # looking the name up in bpy.data.
+        self._used_keys: Set[str] = {"INTER_ROOT"}
+        self._hint_by_key: Dict[str, str] = {}
+        self._objects_by_key: Dict[str, bpy.types.Object] = {}
         # ---------------------------------------------------------------------
 
     def build_cmd(
@@ -632,7 +642,7 @@ class ImpCommandBuilder:
             empty = IntermediateDatablock(
                 datablock_info=DatablockInfo(
                     "EMPTY",
-                    name=name_hint or self._next_empty_name(),
+                    name=self._new_key(name_hint, "ImpEmpty"),
                     parent_info=ParentInfo(parent.datablock_info.name),
                     collection=self.root_collection,
                 ),
@@ -672,7 +682,7 @@ class ImpCommandBuilder:
             intermediate_datablock = IntermediateDatablock(
                 datablock_info=DatablockInfo(
                     datablock_type="MESH",
-                    name=name_hint or self._next_object_name(),
+                    name=self._new_key(name_hint, "ImpMesh"),
                     # How do we keep track of this
                     parent_info=ParentInfo(parent.datablock_info.name),
                     collection=self.root_collection,
@@ -1136,9 +1146,12 @@ class ImpCommandBuilder:
                                     ) in next_animation.rotations.items():
                                         is_axis_aligned = is_vector_axis_aligned(axis)
 
+                                        # -Y and +Y are the same Euler channel, so
+                                        # compare ignoring sign or we'd build a
+                                        # 4-axis "Euler" that can't exist
                                         already_used = any(
-                                            round_vec(axis, PRECISION_KEYFRAME)
-                                            == round_vec(vec, PRECISION_KEYFRAME)
+                                            round_vec(Vector(map(abs, axis)), PRECISION_KEYFRAME)
+                                            == round_vec(Vector(map(abs, vec)), PRECISION_KEYFRAME)
                                             for vec in rotations
                                         )
                                         # print("is_axis_aligned:", is_axis_aligned)
@@ -1398,11 +1411,12 @@ class ImpCommandBuilder:
 
                     static_info = DatablockInfo(
                         datablock_type="EMPTY",
-                        name=out_block.datablock_info.name + ".s",
+                        name=self._new_key("", out_block.datablock_info.name + ".s"),
                         parent_info=out_block.datablock_info.parent_info,
                         collection=out_block.datablock_info.collection,
                     )
                     ob_static = self._create_empty(static_info)
+                    ob_static.name = self._display_name(out_block) + ".static"
                     if ob_static.parent and out_block.bake_matrix == Matrix.Identity(4):
                         ob_static.matrix_parent_inverse = Matrix.Identity(4)
                     ob_static.matrix_local = out_block.bake_matrix.copy()
@@ -1412,10 +1426,11 @@ class ImpCommandBuilder:
                     dynamic_info = DatablockInfo(
                         datablock_type="EMPTY",
                         name=out_block.datablock_info.name,
-                        parent_info=ParentInfo(ob_static.name),
+                        parent_info=ParentInfo(static_info.name),
                         collection=out_block.datablock_info.collection,
                     )
                     ob_dyn = self._create_empty(dynamic_info)
+                    ob_dyn.name = self._display_name(out_block)
                     ob_dyn.matrix_parent_inverse = Matrix.Identity(4)
                     ob_dyn.matrix_local = Matrix.Identity(4)
                     bpy.context.view_layer.update()
@@ -1430,12 +1445,16 @@ class ImpCommandBuilder:
                     ob = None  # already fully set up; skip the shared if ob: block
                 else:
                     ob = self._create_empty(out_block.datablock_info)
+                    ob.name = self._display_name(out_block)
             elif out_block.datablock_type == "MESH":
                 try:
-                    ob = out_block.build_mesh(self.vt_table)
+                    ob = out_block.build_mesh(self.vt_table, self._resolve_parent)
                 except ValueError:
                     ob = None
                 else:
+                    self._objects_by_key[out_block.name] = ob
+                    ob.name = self._display_name(out_block)
+                    ob.data.name = ob.name
                     if out_block.skipped_faces:
                         self._skipped_faces += out_block.skipped_faces
                         self._meshes_with_skipped_faces += 1
@@ -1542,28 +1561,53 @@ class ImpCommandBuilder:
         info.parent_info = None  # prevent 4.3.x set_parent call inside create_datablock_empty
         ob = test_creation_helpers.create_datablock_empty(info)
         if our_parent_info and our_parent_info.parent:
-            pref = our_parent_info.parent
-            parent_ob = bpy.data.objects.get(pref) if isinstance(pref, str) else pref
+            parent_ob = self._resolve_parent(our_parent_info.parent)
             if parent_ob:
                 ob.parent = parent_ob
         info.parent_info = our_parent_info  # restore for future reads
+        self._objects_by_key[info.name] = ob
         return ob
 
-    def _next_empty_name(self) -> str:
-        return (
-            f"ImpEmpty."
-            f"{sum(1 for block in self._blocks if block.datablock_type == 'EMPTY'):03}"
-            f"_{hex(hash(self.root_collection.name))[2:6]}"
-            f"_{random.randint(0,100000)}"
-        )
+    def _resolve_parent(self, parent: Union[str, bpy.types.Object, None]) -> Optional[bpy.types.Object]:
+        if isinstance(parent, bpy.types.Object):
+            return parent
+        return self._objects_by_key.get(parent)
 
-    def _next_object_name(self) -> str:
-        return (
-            f"ImpMesh."
-            f"{sum(1 for block in self._blocks if block.datablock_type == 'MESH'):03}"
-            f"_{hex(hash(self.root_collection.name))[2:6]}"
-            f"_{random.randint(0,100000)}"
-        )
+    def _new_key(self, name_hint: str, fallback: str) -> str:
+        """A key for a new intermediate block, unique within this import"""
+        base = name_hint or fallback
+        key, n = base, 0
+        while key in self._used_keys:
+            n += 1
+            key = f"{base}.{n:03}"
+        self._used_keys.add(key)
+        if name_hint:
+            self._hint_by_key[key] = name_hint
+        return key
+
+    def _display_name(self, block: IntermediateDatablock) -> str:
+        """
+        What the user sees in the Outliner: the OBJ's name hint when it has one,
+        else what the object does (its dataref or manipulator command), so a
+        cockpit reads as "flap_ratio", "servos_toggle" instead of "ImpMesh.412"
+        """
+        if block.name in self._hint_by_key:
+            return self._hint_by_key[block.name]
+
+        def last_part(path: str) -> str:
+            return path.replace("CMND=", "").rstrip("/").rsplit("/", 1)[-1]
+
+        manip = block.manip if block.datablock_type == "MESH" else None
+        if manip:
+            for path in (manip.command, manip.positive_command, manip.dataref1):
+                if path and path != "none":
+                    return last_part(path)
+        animations = [block.transform_animation, *block.show_hide_animations]
+        for animation in animations:
+            path = animation.xp_dataref.path if animation else ""
+            if path and path != "none":
+                return last_part(path)
+        return "Mesh" if block.datablock_type == "MESH" else "Anim"
 
     def _apply_pending_attr(self, directive: str, c: List[str]) -> None:
         attrs = self._pending_attrs

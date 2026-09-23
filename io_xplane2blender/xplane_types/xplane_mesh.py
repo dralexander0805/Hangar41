@@ -79,7 +79,9 @@ class XPlaneMesh:
                 )
                 mesh.transform(xplaneObject.bakeMatrix)
 
-                mesh.calc_normals_split()
+                # Removed in Blender 4.1, where split normals are always available
+                if hasattr(mesh, "calc_normals_split"):
+                    mesh.calc_normals_split()
                 mesh.calc_loop_triangles()
                 loop_triangles = mesh.loop_triangles
                 try:

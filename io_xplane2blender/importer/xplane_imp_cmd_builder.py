@@ -177,8 +177,10 @@ class IntermediateAnimation:
             """
             if rotation_mode == "AXIS_ANGLE":
                 axis, rotations = next(iter(self.rotations.items()))
-                # 4.3.x KeyframeInfo expects (angle, axis) tuple for AXIS_ANGLE
-                return (math.radians(rotations[keyframe_idx]), Vector(axis))
+                # KeyframeInfo turns any tuple into an Euler, so this must be an AxisAngle
+                return test_creation_helpers.AxisAngle(
+                    Vector(axis), math.radians(rotations[keyframe_idx])
+                )
             else:
 
                 def axis_to_label(axis):
@@ -206,7 +208,7 @@ class IntermediateAnimation:
                     # Remember, all axis are normalized, so we're okay
                     euler_components[axis_label] = axis[
                         r_axis.index(True)
-                    ] * degrees[keyframe_idx]
+                    ] * math.radians(degrees[keyframe_idx])
 
                 tot_rot = Euler(euler_components.values(), rotation_mode)
                 return tot_rot

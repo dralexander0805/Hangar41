@@ -1095,9 +1095,19 @@ class ImpCommandBuilder:
                                 # preserved as a real Blender object. In that case, return
                                 # in_block so it gets processed first, and the MESH is picked
                                 # up on the next outer-loop iteration.
+                                # A mesh's own bake_matrix becomes its
+                                # location/rotation, which Blender applies after
+                                # (inside) any keyed rotation, while X-Plane
+                                # rotates the baked mesh. So a rotating EMPTY only
+                                # folds into a mesh with no bake of its own.
+                                # (Keyed locations add to the bake; those are fine.)
                                 if (
                                     len(in_block.children) == 1
                                     and in_block.bake_matrix == Matrix.Identity(4)
+                                    and (
+                                        next_block.bake_matrix == Matrix.Identity(4)
+                                        or not in_block.transform_animation.rotations
+                                    )
                                 ):
                                     next_block.transform_animation = copy.copy(
                                         in_block.transform_animation
@@ -1111,6 +1121,16 @@ class ImpCommandBuilder:
                                     return next_block, peek_next_block_itr
                                 else:
                                     return in_block, searching_itr
+                            elif (
+                                next_block_type == "EMPTY"
+                                and in_block_path == next_block_path
+                                and next_block.bake_matrix != Matrix.Identity(4)
+                            ):
+                                # A static transform sits between the two
+                                # animations (e.g. a pivot shift). Merging
+                                # would drop it, so keep them as separate
+                                # objects; the outer loop handles next_block.
+                                return (in_block, searching_itr)
                             elif (
                                 next_block_type == "EMPTY"
                                 and in_block_path == next_block_path
@@ -1471,8 +1491,10 @@ class ImpCommandBuilder:
                     ob_static.name = self._display_name(out_block) + ".static"
                     if ob_static.parent and out_block.bake_matrix == Matrix.Identity(4):
                         ob_static.matrix_parent_inverse = Matrix.Identity(4)
-                    ob_static.matrix_local = out_block.bake_matrix.copy()
+                    # Mode first: changing between Euler orders keeps the
+                    # numbers, not the orientation, so it must precede the matrix
                     ob_static.rotation_mode = out_block.rotation_mode
+                    ob_static.matrix_local = out_block.bake_matrix.copy()
 
                     dynamic_info = DatablockInfo(
                         datablock_type="EMPTY",
@@ -1483,8 +1505,8 @@ class ImpCommandBuilder:
                     ob_dyn = self._create_empty(dynamic_info)
                     ob_dyn.name = self._display_name(out_block)
                     ob_dyn.matrix_parent_inverse = Matrix.Identity(4)
-                    ob_dyn.matrix_local = Matrix.Identity(4)
                     ob_dyn.rotation_mode = out_block.rotation_mode
+                    ob_dyn.matrix_local = Matrix.Identity(4)
                     try:
                         out_block.transform_animation.apply_animation(ob_dyn)
                     except AttributeError:
@@ -1525,9 +1547,9 @@ class ImpCommandBuilder:
                 # world-space transform.
                 if ob.parent and out_block.bake_matrix == Matrix.Identity(4):
                     ob.matrix_parent_inverse = Matrix.Identity(4)
-                ob.matrix_local = out_block.bake_matrix.copy()
-
+                # Mode first (see ob_static above)
                 ob.rotation_mode = out_block.rotation_mode
+                ob.matrix_local = out_block.bake_matrix.copy()
 
                 try:
                     out_block.transform_animation.apply_animation(ob)

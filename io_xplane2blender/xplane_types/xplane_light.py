@@ -26,7 +26,8 @@ class _LightSpillCustomParams:
 
     @property
     def a(self):
-        return 1
+        # Always 1, except for an imported light that had another
+        return getattr(self, "alpha", 1)
 
     size: float
     dx: float
@@ -485,6 +486,7 @@ class XPlaneLight(xplane_object.XPlaneObject):
             p.dx, p.dy, p.dz = new_dxyz_vec_x()
             p.width = width_param_new_value()
             p.dataref = self.dataref
+            p.alpha = light_data.get("xplane_imp_spill_alpha", 1)
         # X-Plane Light Type | Light Type | parsed_light | light_param_defs | Result
         # -------------------|------------|--------------|------------------|-------
         # LIGHT_{OLD_TYPES}  | *          | N/A          | N/A              | Write

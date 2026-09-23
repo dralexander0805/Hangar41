@@ -156,6 +156,32 @@ class TestLenientNumbersAndHeader(XPlaneTestCase):
             [ob.data.xplane.name for ob in lights], ["carrier_center_white"]
         )
 
+    def test_sketchup2xplane_vertex_and_idx(self) -> None:
+        # world-models' hedgerows: VERTEX for VT, several indices per IDX
+        import_obj(
+            write_obj(
+                "sketchup",
+                "I\n800\nOBJ\n\nPOINT_COUNTS 4 0 0 6\n"
+                "VERTEX 0 0 0 0 1 0 0 0\nVERTEX 1 0 0 0 1 0 1 0\n"
+                "VERTEX 0 0 1 0 1 0 0 1\nVERTEX 1 0 1 0 1 0 1 1\n"
+                "IDX 0 1 2 1 3\nIDX 2\nTRIS 0 6\n",
+            )
+        )
+        (mesh,) = self.meshes()
+        self.assertEqual(len(mesh.data.polygons), 2)
+
+    def test_geometry_before_first_lod_kept(self) -> None:
+        # SAM's docking poles: a TRIS, then ATTR_LOD. It was dropped on export
+        import_obj(
+            write_obj(
+                "before_lod",
+                "I\n800\nOBJ\n\n" + BODY + "TRIS 0 3\nATTR_LOD 0 150\nTRIS 0 3\n",
+            )
+        )
+        for ob in self.meshes():
+            self.assertTrue(ob.xplane.override_lods)
+            self.assertTrue(ob.xplane.lod[0])
+
     def test_garbage_still_fails(self) -> None:
         with self.assertRaises(xplane_imp_parser.UnrecoverableParserError):
             import_obj(

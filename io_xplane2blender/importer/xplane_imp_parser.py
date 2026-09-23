@@ -97,6 +97,7 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
     # Everything before POINT_COUNTS is the header
     in_header = True
     unsupported: Dict[str, int] = collections.Counter()
+    nonstandard: Dict[str, int] = collections.Counter()
     # A line to parse again, with its run-together numbers split
     reparse: List[Tuple[int, str]] = []
 
@@ -121,6 +122,13 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             continue
         else:
             directive, *components = to_parse.split()
+            # SketchUp2XPlane writes VERTEX for VT, and IDX lines of up to 10
+            if directive == "VERTEX":
+                directive = "VT"
+                nonstandard["VERTEX (read as VT)"] += 1
+            elif directive == "IDX" and len(components) > 1:
+                directive = "IDX10"
+                nonstandard["IDX with several indices"] += 1
 
         if directive == "SKIP":
             skip = not skip
@@ -224,7 +232,7 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                     builder.build_cmd(directive, idx)
             elif directive == "IDX10":
                 # idx error etc
-                builder.build_cmd(directive, *map(int, components[:11]))
+                builder.build_cmd(directive, *map(int, components[:10]))
             elif directive == "TRIS":
                 start_idx = int(components[0])
                 count = int(components[1])
@@ -322,6 +330,11 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             logger.error(msg)
             raise UnrecoverableParserError(msg) from e
 
+    if nonstandard:
+        logger.warn(
+            "Not standard OBJ8, imported anyway: "
+            + ", ".join(f"{d} x{n}" for d, n in nonstandard.most_common())
+        )
     if unsupported:
         logger.warn(
             "Not imported, so these will be missing from an export: "

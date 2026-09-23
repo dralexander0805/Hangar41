@@ -94,7 +94,7 @@ Hangar41 is in beta. Keep backups of your `.blend` files.
 
 **If something wasn't imported, you're told.** After each import, the Info bar lists anything that won't make it into an export; the full log is in Blender's Text Editor as *Import for …*. Right now that covers:
 
-- `LIGHT_SPILL_CUSTOM` and old-style `LIGHTS` vertex lights
+- old-style `LIGHTS` vertex lights
 - attributes from before X-Plane 10: `ATTR_cull`, `ATTR_no_cull`, `ATTR_diffuse_rgb`, `ATTR_emission_rgb`
 - detent ranges on a drag manipulator whose `ATTR_axis_detented` has a zero axis (the manipulator itself is kept)
 - `ATTR_axis_detent_range 0 0 0` on a plain drag-rotate handle, which some tools write and which does nothing (the handle is kept)

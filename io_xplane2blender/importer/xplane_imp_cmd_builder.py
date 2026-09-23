@@ -60,6 +60,7 @@ from io_xplane2blender.xplane_constants import (
     EMPTY_USAGE_EMITTER_PARTICLE,
     EMPTY_USAGE_MAGNET,
     LIGHT_CUSTOM,
+    LIGHT_SPILL_CUSTOM,
     LIGHT_NAMED,
     LIGHT_PARAM,
     MAX_COCKPIT_REGIONS,
@@ -149,7 +150,7 @@ NEVER_DRAWN_LOD = -1
 
 # Directives that place a light or magnet at a point in the current animation frame
 POINT_DIRECTIVES = frozenset(
-    {"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "MAGNET", "EMITTER"}
+    {"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "LIGHT_SPILL_CUSTOM", "MAGNET", "EMITTER"}
 )
 
 
@@ -719,6 +720,8 @@ class ImpCommandBuilder:
         self._current_lod: Optional[int] = None
         # TRIS and lights left out for being in an LOD that's never drawn
         self._never_drawn = 0
+        # Meshes and lights before the first ATTR_LOD, put in the first bucket
+        self._before_first_lod = 0
 
         # Intermediate blocks refer to their parent by a key unique to this
         # import. Blender renames objects whose name is taken (e.g. by an
@@ -1637,9 +1640,16 @@ class ImpCommandBuilder:
                 ob.rotation_mode = out_block.rotation_mode
                 ob.matrix_local = out_block.bake_matrix.copy()
 
-                if out_block.lod is not None and ob.type in {"MESH", "LIGHT"}:
+                lod = out_block.lod
+                if lod is None and self._lods and ob.type in {"MESH", "LIGHT"}:
+                    # Before the first ATTR_LOD, which the spec doesn't allow
+                    # (SAM's docking poles). The exporter would drop it for
+                    # being in no bucket, so it goes in the first
+                    lod = 0
+                    self._before_first_lod += 1
+                if lod is not None and ob.type in {"MESH", "LIGHT"}:
                     ob.xplane.override_lods = True
-                    ob.xplane.lod[min(out_block.lod, MAX_LODS - 2)] = True
+                    ob.xplane.lod[min(lod, MAX_LODS - 2)] = True
 
                 try:
                     out_block.transform_animation.apply_animation(ob)
@@ -1659,6 +1669,11 @@ class ImpCommandBuilder:
                 " point past the vertex table, so X-Plane doesn't draw them either"
             )
 
+        if self._before_first_lod:
+            logger.warn(
+                f"{self._before_first_lod} mesh(es)/light(s) come before the first"
+                " ATTR_LOD; they were put in the first LOD bucket"
+            )
         if self._never_drawn:
             logger.warn(
                 f"Left out {self._never_drawn} TRIS/light(s) in an ATTR_LOD whose far"
@@ -1763,7 +1778,8 @@ class ImpCommandBuilder:
         LIGHT_NAMED <name> x y z, LIGHT_PARAM <name> x y z <params...>,
         LIGHT_CUSTOM x y z r g b a s s1 t1 s2 t2 <dataref>,
         MAGNET <debug name> <type> x y z <yaw> <pitch> <roll>,
-        EMITTER <name> x y z <yaw> <pitch> <roll> [index].
+        EMITTER <name> x y z <yaw> <pitch> <roll> [index],
+        LIGHT_SPILL_CUSTOM x y z r g b a size dx dy dz width <dataref>.
         Raises ValueError/IndexError on malformed lines (the parser reports them).
         """
         if directive == "EMITTER":
@@ -1788,6 +1804,25 @@ class ImpCommandBuilder:
             datablock_type = "MAGNET"
             # Magnets only exist in cockpit objects
             self.is_cockpit = True
+        elif directive == "LIGHT_SPILL_CUSTOM":
+            x, y, z = map(float, c[0:3])
+            r, g, b, a, size, dx, dy, dz, width = map(float, c[3:12])
+            direction = vec_x_to_b((dx, dy, dz))
+            # Omni unless it points somewhere; a Spot light's -Z is its direction
+            spot = direction.length > 1e-6 and width < 1
+            rotation = (
+                Vector((0, 0, -1)).rotation_difference(direction).to_matrix().to_4x4()
+                if spot
+                else Matrix.Identity(4)
+            )
+            fields = {
+                "rgb": (r, g, b),
+                "alpha": a,
+                "size": size,
+                "width": width if spot else None,
+                "dataref": c[12] if len(c) > 12 else "none",
+            }
+            datablock_type = "LIGHT"
         elif directive == "LIGHT_CUSTOM":
             x, y, z = map(float, c[0:3])
             rgba_size_uv = [float(v) for v in c[3:12]]
@@ -1852,6 +1887,23 @@ class ImpCommandBuilder:
             kinds = set(fields["type"].split("|"))
             props.magnet_props.magnet_type_is_xpad = "xpad" in kinds
             props.magnet_props.magnet_type_is_flashlight = "flashlight" in kinds
+        elif directive == "LIGHT_SPILL_CUSTOM":
+            spot = fields["width"] is not None
+            light = bpy.data.lights.new(name, "SPOT" if spot else "POINT")
+            light.xplane.type = LIGHT_SPILL_CUSTOM
+            # Override, since custom light colors may be outside 0-1
+            light.xplane.enable_rgb_override = True
+            light.xplane.rgb_override_values = fields["rgb"]
+            light.xplane.size = fields["size"]
+            light.xplane.dataref = fields["dataref"]
+            # The exporter writes WIDTH as cos(half the spot size)
+            if spot:
+                light.spot_size = max(
+                    math.radians(1), 2 * math.acos(max(0.0, min(1.0, fields["width"])))
+                )
+            # The exporter has no setting for A; it's kept for it
+            light["xplane_imp_spill_alpha"] = fields["alpha"]
+            ob = bpy.data.objects.new(name, light)
         else:
             light = bpy.data.lights.new(name, "POINT")
             # A Point light keeps the exporter from adding direction-correcting

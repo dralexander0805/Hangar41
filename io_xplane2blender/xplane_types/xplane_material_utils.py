@@ -216,10 +216,8 @@ def validatePanel(mat: XPlaneMaterial) -> MaterialValidationMsgs:
     errors = []  # type: List[str]
     warnings = []  # type: List[str]
 
-    if mat.options.lightLevel:
-        # Shipped cockpits leave ATTR_light_level on over their panel (the
-        # Metro III, the H145), so an import has it too. Keep it, but say so.
-        warnings.append("Overrides light level while part of the panel.")
+    # ATTR_light_level on panel parts is fine: AviTab's own sample lights its
+    # screen with it, and shipped cockpits (the Metro III, the H145) do too
 
     if mat.options.draw:
         if mat.textureLit:

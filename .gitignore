@@ -33,3 +33,9 @@ IMPORTER_CONTEXT.md
 *.obj
 .claude/
 tests/tmp_user_scripts
+
+# Test fixtures are part of the suite (restored from XPlane2Blender v4.2.0-alpha.1)
+!tests/**/*.blend
+!tests/**/*.obj
+# but not what tests write
+tests/tmp/

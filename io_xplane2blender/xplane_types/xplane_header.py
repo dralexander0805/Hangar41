@@ -1,6 +1,7 @@
 import os
 import platform
 import re
+import shutil
 from collections import OrderedDict
 from typing import List
 
@@ -13,6 +14,7 @@ from ..xplane_helpers import (
     effective_normal_metalness,
     effective_normal_metalness_draped,
     floatToStr,
+    get_plugin_resources_folder,
     logger,
     resolveBlenderPath,
 )
@@ -584,6 +586,16 @@ class XPlaneHeader:
             respath = os.path.abspath(os.path.normpath(respath))
         else:
             respath = os.path.abspath(os.path.normpath(os.path.join(blenddir, respath)))
+
+        # Textures the add-on ships (the AviTab tablet's) can't be reached
+        # from the aircraft, so they go next to the .obj
+        bundled = os.path.abspath(get_plugin_resources_folder())
+        if os.path.normcase(respath).startswith(os.path.normcase(bundled + os.sep)):
+            copy = os.path.join(exportdir, os.path.basename(respath))
+            if not os.path.exists(copy):
+                os.makedirs(exportdir, exist_ok=True)
+                shutil.copyfile(respath, copy)
+            respath = copy
 
         try:
             respath = os.path.relpath(respath, exportdir)

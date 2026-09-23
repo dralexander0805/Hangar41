@@ -3,6 +3,7 @@
 import os
 import os.path
 import sys
+import traceback
 from typing import IO, Any, Optional
 
 import bpy
@@ -60,6 +61,38 @@ class EXPORT_OT_ExportXPlane(bpy.types.Operator, ExportHelper):
     # Parameters:
     #   context - Blender context object.
     def execute(self, context):
+        try:
+            result = self._execute(context)
+        except Exception as e:
+            logger.error(traceback.format_exc())
+            self._endLogging()
+            self.report(
+                {"ERROR"},
+                f"Export failed unexpectedly ({type(e).__name__}: {e}). This is"
+                " likely an exporter bug; please open an issue and attach the"
+                " 'xplane2blender.log' text from Blender's Text Editor.",
+            )
+            return {"CANCELLED"}
+
+        errors = logger.findErrors()
+        warnings = logger.findWarnings()
+        see_log = "see 'xplane2blender.log' in the Text Editor for details"
+        if errors:
+            more = f" (+{len(errors) - 1} more)" if len(errors) > 1 else ""
+            self.report(
+                {"ERROR"},
+                f"Export failed: {errors[0]['message']}{more}; {see_log}",
+            )
+        elif warnings:
+            self.report(
+                {"WARNING"},
+                f"Export finished with {len(warnings)} warning(s); {see_log}",
+            )
+        elif "FINISHED" in result:
+            self.report({"INFO"}, "Export finished")
+        return result
+
+    def _execute(self, context):
         # prepare logging
         self._startLogging()
 
@@ -166,7 +199,7 @@ class EXPORT_OT_ExportXPlane(bpy.types.Operator, ExportHelper):
                 logger.error("Cannot create log file if .blend file is not saved")
 
     def _endLogging(self):
-        if self.logFile:
+        if getattr(self, "logFile", None):
             self.logFile.close()
 
     def _writeXPlaneFile(

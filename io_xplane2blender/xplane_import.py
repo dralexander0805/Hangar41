@@ -4,6 +4,7 @@ import os
 import os.path
 import pathlib
 import sys
+import traceback
 from typing import IO, Any, Optional
 
 import bpy
@@ -51,18 +52,37 @@ class IMPORT_OT_ImportXPlane(bpy.types.Operator, ImportHelper):
     )
 
     def execute(self, context):
+        filename = pathlib.Path(self.filepath).name
+        log_name = f"Import for {filename}"
         logger.clear()
-        # logger.addTransport(logger.ConsoleTransport)
-        logger.addTransport(
-            logger.InternalTextTransport(
-                f"Import for {pathlib.Path(self.filepath).name}"
-            )
-        )
+        logger.addTransport(logger.InternalTextTransport(log_name))
         logger.addTransport(logger.ConsoleTransport())
-        # logger.info("Begin importing")
-        x = xplane_imp_parser.import_obj(self.filepath)
+        try:
+            xplane_imp_parser.import_obj(self.filepath)
+        except xplane_imp_parser.UnrecoverableParserError as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+        except Exception as e:
+            # A bug in the importer rather than a problem the user can fix.
+            logger.error(traceback.format_exc())
+            self.report(
+                {"ERROR"},
+                f"Importing '{filename}' failed unexpectedly ({type(e).__name__}: {e})."
+                f" This is likely an importer bug; please open an issue and attach"
+                f" the .obj and the '{log_name}' text from Blender's Text Editor.",
+            )
+            return {"CANCELLED"}
 
-        # print("IMPORT!")
+        warnings = logger.findWarnings()
+        if warnings:
+            self.report(
+                {"WARNING"},
+                f"Imported '{filename}' with {len(warnings)} warning(s),"
+                f" first: {warnings[0]['message']}"
+                f" (see '{log_name}' in the Text Editor for all)",
+            )
+        else:
+            self.report({"INFO"}, f"Imported '{filename}'")
         return {"FINISHED"}
 
     def invoke(self, context, event):

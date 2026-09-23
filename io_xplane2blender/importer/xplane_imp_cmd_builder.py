@@ -884,7 +884,13 @@ class ImpCommandBuilder:
                         self._pending_manip.detent_v1_min = float(c[3])
                         self._pending_manip.detent_v1_max = float(c[4])
                         self._pending_manip.detent_dataref = c[5] if len(c) > 5 else ""
-                        self._pending_manip.manip_type = MANIP_DRAG_AXIS_DETENT
+                        # A drag_rotate with a lift axis is still a rotate detent
+                        self._pending_manip.manip_type = (
+                            MANIP_DRAG_ROTATE_DETENT
+                            if self._pending_manip.manip_type
+                            in (MANIP_DRAG_ROTATE, MANIP_DRAG_ROTATE_DETENT)
+                            else MANIP_DRAG_AXIS_DETENT
+                        )
                         if len(c) > 5:
                             self._pending_manip.dataref2 = c[5]
                     except (IndexError, ValueError):

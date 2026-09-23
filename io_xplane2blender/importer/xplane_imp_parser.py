@@ -265,6 +265,11 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                 "ATTR_axis_detented",
                 "ATTR_axis_detent_range",
             }:
+                if directive != "ATTR_manip_none":
+                    # Manipulators only work in a cockpit object, and the
+                    # exporter only writes them for the Cockpit type. Many
+                    # cockpit OBJs have no GLOBAL_cockpit_lit to tell us.
+                    builder.is_cockpit = True
                 builder.build_cmd(directive, components)
             elif directive in {
                 "ATTR_draw_disable",

@@ -222,6 +222,9 @@ class XPlaneFile:
         # these are garunteed to be under the root bone
         self.commands = XPlaneCommands(self)
         self.filename = filename
+        # Absolute path the .obj is written to, set by the export operator.
+        # Texture paths are made relative to it.
+        self.export_path: Optional[str] = None
         self.options = options
 
         self.lights = XPlaneVLights()

@@ -182,16 +182,7 @@ class XPlaneHeader:
 
         # set Texture
         blenddir = os.path.dirname(bpy.context.blend_data.filepath)
-
-        # normalize the exporpath
-        if os.path.isabs(self.xplaneFile.filename):
-            exportdir = os.path.dirname(os.path.normpath(self.xplaneFile.filename))
-        else:
-            exportdir = os.path.dirname(
-                os.path.abspath(
-                    os.path.normpath(os.path.join(blenddir, self.xplaneFile.filename))
-                )
-            )
+        exportdir = self._export_dir(blenddir)
 
         if self.xplaneFile.options.autodetectTextures:
             # 2.8 doesn't work with Texture Slots Anymore. self._autodetectTextures()
@@ -342,20 +333,7 @@ class XPlaneHeader:
         if xplane_version >= 1130:
             if self.xplaneFile.options.particle_system_file:
                 blenddir = os.path.dirname(bpy.context.blend_data.filepath)
-
-                # normalize the exporpath
-                if os.path.isabs(self.xplaneFile.filename):
-                    exportdir = os.path.dirname(
-                        os.path.normpath(self.xplaneFile.filename)
-                    )
-                else:
-                    exportdir = os.path.dirname(
-                        os.path.abspath(
-                            os.path.normpath(
-                                os.path.join(blenddir, self.xplaneFile.filename)
-                            )
-                        )
-                    )
+                exportdir = self._export_dir(blenddir)
                 pss = self.getPathRelativeToOBJ(
                     self.xplaneFile.options.particle_system_file, exportdir, blenddir
                 )
@@ -573,6 +551,19 @@ class XPlaneHeader:
             bpy.context.scene.render.image_settings.color_mode = color_mode
 
         return texture
+
+    def _export_dir(self, blenddir: str) -> str:
+        """The folder the .obj is written to. File > Export can pick any folder,
+        so texture paths must be relative to that, not to the .blend"""
+        if self.xplaneFile.export_path:
+            return os.path.dirname(self.xplaneFile.export_path)
+        if os.path.isabs(self.xplaneFile.filename):
+            return os.path.dirname(os.path.normpath(self.xplaneFile.filename))
+        return os.path.dirname(
+            os.path.abspath(
+                os.path.normpath(os.path.join(blenddir, self.xplaneFile.filename))
+            )
+        )
 
     # Method: getPathRelativeToOBJ
     # Returns the resource path relative to the exported OBJ

@@ -32,3 +32,4 @@ tests/object/config_blends/*
 IMPORTER_CONTEXT.md
 *.obj
 .claude/
+tests/tmp_user_scripts

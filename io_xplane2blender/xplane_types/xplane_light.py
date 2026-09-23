@@ -265,11 +265,15 @@ class XPlaneLight(xplane_object.XPlaneObject):
             and parsed_light
             and not parsed_light.light_param_def
         ):
-            logger.error(
-                f"Light name {self.lightName} is a named light, not a param light."
-                f" Check the light type drop down menu"
+            # Shipped aircraft do this (the AW139's LIGHT_PARAM airplane_beacon_sp),
+            # so write it as is rather than make an imported OBJ unexportable
+            logger.warn(
+                f"Light name {self.lightName} is a named light, not a param light;"
+                f" its parameters are written as is. Check the light type drop down menu"
             )
-            return
+            if not self.blenderObject.data.xplane.params.split():
+                logger.error(f"'{self.blenderObject.name}' has an empty parameters box")
+                return
         # Even if we don't know the PARAM light, we still have to check if we're about to write out no params
         elif self.lightType == LIGHT_PARAM and not parsed_light:
             logger.warn(unknown_light_name_warning)

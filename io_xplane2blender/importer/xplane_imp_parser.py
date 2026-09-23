@@ -64,7 +64,10 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
         logger.error(msg)
         raise UnrecoverableParserError(msg) from e
 
-    header = [line.strip() for line in lines[:3]]
+    # X-Plane skips blank lines in the header; some of its own scenery has them
+    header_at = [i for i, line in enumerate(lines[:64]) if line.strip()][:3]
+    header = [lines[i].strip() for i in header_at]
+    body_start = header_at[-1] + 1 if header_at else 0
     if not (header[:1] in (["A"], ["I"]) and header[1:3] == ["800", "OBJ"]):
         found = " / ".join(repr(line) for line in header) or "an empty file"
         msg = (
@@ -94,8 +97,17 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
     # Everything before POINT_COUNTS is the header
     in_header = True
     unsupported: Dict[str, int] = collections.Counter()
-    # start=4 so lineno matches what a text editor shows
-    for lineno, line in enumerate(map(str.strip, lines[3:]), start=4):
+    # A line to parse again, with its run-together numbers split
+    reparse: List[Tuple[int, str]] = []
+
+    def body_lines():
+        # 1-based so lineno matches what a text editor shows
+        for item in enumerate(map(str.strip, lines[body_start:]), start=body_start + 1):
+            yield item
+            while reparse:
+                yield reparse.pop()
+
+    for lineno, line in body_lines():
         to_parse, comment = re.match(pattern, line).groups()[0:2]
         try:
             if comment.startswith("# name_hint:"):
@@ -228,28 +240,12 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             elif directive == "ANIM_trans":
                 xyz1 = vec_x_to_b(list(map(float, components[:3])))
                 xyz2 = vec_x_to_b(list(map(float, components[3:6])))
-                v1, v2 = (0, 0)
-                path = "none"
-
-                try:
-                    v1 = float(components[6])
-                    v2 = float(components[7])
-                    path = components[8]
-                except IndexError as e:
-                    pass
+                v1, v2, path = _values_and_dataref(components[6:])
                 builder.build_cmd(directive, xyz1, xyz2, v1, v2, path, name_hint=name_hint)
             elif directive == "ANIM_rotate":
                 dxyz = vec_x_to_b(list(map(float, components[:3])))
                 r1, r2 = map(float, components[3:5])
-                v1, v2 = (0, 0)
-                path = "none"
-
-                try:
-                    v1 = float(components[5])
-                    v2 = float(components[6])
-                    path = components[7]
-                except IndexError:
-                    pass
+                v1, v2, path = _values_and_dataref(components[5:])
                 builder.build_cmd(
                     directive, dxyz, r1, r2, v1, v2, path, name_hint=name_hint
                 )
@@ -275,6 +271,16 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
         except UnrecoverableParserError:
             raise
         except (IndexError, ValueError, TypeError) as e:
+            # components may be half converted already; start from the text
+            tokens = to_parse.split()[1:]
+            split = _split_run_on_numbers(tokens)
+            if isinstance(e, ValueError) and split != tokens:
+                logger.warn(
+                    f"Line {lineno}: numbers run together, read as"
+                    f" '{' '.join(split)}' like X-Plane does. Line was: '{line}'"
+                )
+                reparse.append((lineno, " ".join([directive, *split])))
+                continue
             detail = (
                 "a value is missing" if isinstance(e, IndexError) else str(e) or type(e).__name__
             )
@@ -293,6 +299,48 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
 
     builder.finalize_intermediate_blocks()
     return "FINISHED"
+
+
+def _values_and_dataref(rest: List[str]) -> Tuple[float, float, str]:
+    """
+    The tail of a static ANIM_trans or ANIM_rotate: 'v1 v2 dataref', or nothing.
+    Some exporters write just the dataref ('... none'); there are no values then.
+    """
+    if not rest:
+        return 0, 0, "none"
+    if not _NUMBER_CHARS.fullmatch(rest[0]):
+        return 0, 0, rest[0]
+    v1 = float(rest[0])
+    v2 = float(rest[1]) if len(rest) > 1 else 0
+    return v1, v2, rest[2] if len(rest) > 2 else "none"
+
+
+_NUMBER_CHARS = re.compile(r"[-+0-9.eE]*[0-9][-+0-9.eE]*")
+_NUMBER_PREFIX = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
+
+
+def _split_run_on_numbers(tokens: List[str]) -> List[str]:
+    """
+    X-Plane reads numbers like C's strtod: each ends where it stops parsing and
+    the next starts right there, so '-0.1060-0.178' is two numbers and '-90.0.0'
+    is '-90.0' then '.0'. Some tools write such lines; split them the same way.
+    """
+    out = []
+    for tok in tokens:
+        if not _NUMBER_CHARS.fullmatch(tok):
+            out.append(tok)
+            continue
+        try:
+            float(tok)
+        except ValueError:
+            parts, rest = [], tok
+            while rest and (m := _NUMBER_PREFIX.match(rest)):
+                parts.append(m.group())
+                rest = rest[m.end() :]
+            out.extend(parts if parts and not rest else [tok])
+        else:
+            out.append(tok)
+    return out
 
 
 # Header directives that set the starting attribute state, or map to an

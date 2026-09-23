@@ -268,6 +268,8 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             elif directive in POINT_DIRECTIVES:
                 builder.build_cmd(directive, components, name_hint=name_hint)
                 name_hint = ""
+            elif directive == "ATTR_LOD":
+                builder.build_cmd(directive, components)
             else:
                 unsupported[directive] += 1
         except UnrecoverableParserError:

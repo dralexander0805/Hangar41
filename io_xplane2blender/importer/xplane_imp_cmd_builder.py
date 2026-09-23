@@ -62,6 +62,7 @@ from io_xplane2blender.xplane_constants import (
     LIGHT_NAMED,
     LIGHT_PARAM,
     MAX_COCKPIT_REGIONS,
+    MAX_LODS,
     BLEND_SHADOW,
     SURFACE_TYPE_CONCRETE,
     SURFACE_TYPE_NONE,
@@ -450,6 +451,8 @@ class IntermediateDatablock:
     attrs: Optional[IntermediateAttributes] = None
     # For LIGHT and MAGNET blocks: the directive and its parsed fields
     point: Optional[Tuple[str, Dict[str, Any]]] = None
+    # Index of the ATTR_LOD bucket the block was in, if the OBJ uses LODs
+    lod: Optional[int] = None
 
     def build_mesh(
         self,
@@ -690,6 +693,9 @@ class ImpCommandBuilder:
         self._cockpit_panel_mode: Optional[str] = None
         self._skipped_faces = 0
         self._meshes_with_skipped_faces = 0
+        # (near, far) per ATTR_LOD, and which one TRIS/lights are currently in
+        self._lods: List[Tuple[float, float]] = []
+        self._current_lod: Optional[int] = None
 
         # Intermediate blocks refer to their parent by a key unique to this
         # import. Blender renames objects whose name is taken (e.g. by an
@@ -771,6 +777,7 @@ class ImpCommandBuilder:
             )
             intermediate_datablock.manip = copy.deepcopy(self._pending_manip)
             intermediate_datablock.attrs = copy.deepcopy(self._pending_attrs)
+            intermediate_datablock.lod = self._current_lod
             self._blocks.append(intermediate_datablock)
             parent.children.append(intermediate_datablock)
 
@@ -990,6 +997,10 @@ class ImpCommandBuilder:
             self._apply_pending_attr(directive, args[0] if args else [])
         elif directive in POINT_DIRECTIVES:
             self._add_point_block(directive, args[0], name_hint)
+        elif directive == "ATTR_LOD":
+            near, far = (float(v) for v in args[0][:2])
+            self._lods.append((near, far))
+            self._current_lod = len(self._lods) - 1
         else:
             assert False, f"{directive} is not supported yet"
 
@@ -1569,6 +1580,10 @@ class ImpCommandBuilder:
                 ob.rotation_mode = out_block.rotation_mode
                 ob.matrix_local = out_block.bake_matrix.copy()
 
+                if out_block.lod is not None and ob.type in {"MESH", "LIGHT"}:
+                    ob.xplane.override_lods = True
+                    ob.xplane.lod[min(out_block.lod, MAX_LODS - 2)] = True
+
                 try:
                     out_block.transform_animation.apply_animation(ob)
                 except AttributeError:  # No transform animation
@@ -1609,6 +1624,7 @@ class ImpCommandBuilder:
         layer.normal_metalness = self.normal_metalness
         layer.blend_glass = self.blend_glass
         self._apply_cockpit_regions(layer)
+        self._apply_lods(layer)
         for name, value in self.custom_header:
             attr = layer.customAttributes.add()
             attr.name = name
@@ -1718,6 +1734,7 @@ class ImpCommandBuilder:
             @ rotation,
         )
         block.point = (directive, fields)
+        block.lod = self._current_lod
         self._blocks.append(block)
         parent.children.append(block)
 
@@ -1803,6 +1820,20 @@ class ImpCommandBuilder:
             attrs.blend_ratio = number(0, 0.5)
         elif directive == "GLOBAL_no_shadow":
             attrs.shadow = False
+
+    def _apply_lods(self, layer) -> None:
+        max_buckets = MAX_LODS - 1
+        if not self._lods:
+            return
+        layer.lods = str(min(len(self._lods), max_buckets))
+        for i, (near, far) in enumerate(self._lods[:max_buckets]):
+            layer.lod[i].near = round(near)
+            layer.lod[i].far = round(far)
+        if len(self._lods) > max_buckets:
+            logger.warn(
+                f"OBJ has {len(self._lods)} ATTR_LODs; the exporter supports"
+                f" {max_buckets}, so the extra ones were merged into the last"
+            )
 
     def _apply_cockpit_regions(self, layer) -> None:
         regions = self.cockpit_regions[:MAX_COCKPIT_REGIONS]

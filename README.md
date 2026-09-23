@@ -86,6 +86,8 @@ Hangar41 needs **Blender 4.1** and reads objects from **X-Plane 11 and 12**.
 
 **Export.** In **Scene Properties → X-Plane**, click **Export OBJs**. Save to a folder on the same drive as the textures, since X-Plane needs texture paths relative to the `.obj`.
 
+**AviTab.** To give a cockpit an [AviTab](https://github.com/fpw/avitab) tablet, put the 3D cursor where the screen goes and choose **Add → Mesh → AviTab Screen**. Enter your panel texture's size and the rectangle of it AviTab should draw in; the screen comes out at the right proportions, mapped to that rectangle and lit by AviTab's brightness. A tablet body is added around it in its own collection, so it exports as its own `.obj` to add in Plane Maker. Then **File → Export → AviTab.json** writes the file that goes next to your `.acf`.
+
 <p align="center">
   <img src="docs/images/blender-ui.jpg" alt="Blender with an imported cockpit, the Outliner showing named parts and lights, and the Hangar41 X-Plane panel" width="100%">
 </p>

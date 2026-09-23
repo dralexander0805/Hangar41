@@ -46,6 +46,7 @@ if "bpy" in locals():
     importlib.reload(xplane_ops_dev)
     importlib.reload(xplane_config)
     importlib.reload(xplane_updater)
+    importlib.reload(xplane_avitab)
 else:
     import sys
 
@@ -66,6 +67,7 @@ else:
     from . import xplane_ops_dev
     from . import xplane_config
     from . import xplane_updater
+    from . import xplane_avitab
 
 
 # Function: menu_func
@@ -95,6 +97,7 @@ def register():
     xplane_ops.register()
     xplane_ops_dev.register()
     xplane_ui.register()
+    xplane_avitab.register()
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
 
@@ -102,6 +105,7 @@ def register():
 # Function: unregister
 # Unregisters the addon and all its classes and removes the entry from the menu.
 def unregister():
+    xplane_avitab.unregister()
     xplane_export.unregister()
     xplane_import.unregister()
     xplane_ui.unregister()

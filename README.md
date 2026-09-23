@@ -28,21 +28,30 @@ Detent manipulators surviving the round-trip (flap handle):
 
 ## Features
 
-- **OBJ Importer** — bring any X-Plane `.obj` directly into Blender
+- **OBJ Importer** — bring any X-Plane `.obj` directly into Blender, textured in the viewport
 - **Round-trip export** — re-export an imported object back to a working `.obj`
-- **Animations** — translations, rotations, show/hide
+- **Animations** — translations, rotations, show/hide, keyframe loops, including deeply nested pivots
 - **Manipulators** — including detent manips (flap handles, speedbrakes, gear levers)
+- **Lights and magnets** — named, param and custom billboard lights; EFB/flashlight magnets
+- **Attributes** — light levels, panel regions, blending, shadows, hard surfaces, LODs, normals
 - Blender 4.1 compatible
+
+Tested by importing, exporting and re-importing 12 cockpits that ship with X-Plane 12
+(Laminar, Aerobask, X-Aviation, Airfoillabs). Every part lands where X-Plane puts it at
+several animation positions, and manipulators, lights and datarefs survive the trip.
 
 ---
 
 ## Known limitations
 
-This is a beta and has been tested mainly against my own library, which isn't representative of everything people have built. Expect rough edges in:
+This is a beta. Expect rough edges with objects authored in unusual ways by other tools or older exporters.
 
-- Deeply nested or stacked animations
-- Less common manipulator types beyond those listed above
-- Objects authored in unusual ways by other tools or older exporters
+After an import, the Info bar (and the *Import for …* text in Blender's Text Editor) lists anything that wasn't imported and so will be missing from an export. Currently that is:
+
+- `LIGHT_SPILL_CUSTOM` and old-style `LIGHTS` vertex lights
+- `EMITTER` (particle emitters)
+
+A few things are written differently but mean the same to X-Plane: the file header's `GLOBAL_specular` becomes per-material `ATTR_shiny_rat`, and static `ANIM_rotate`/`ANIM_trans` are baked into the geometry.
 
 Bug reports with the offending `.obj` attached are the most useful thing you can contribute right now.
 
@@ -57,11 +66,12 @@ Bug reports with the offending `.obj` attached are the most useful thing you can
 
 ## Installation
 
-1. Download or clone this repo
-2. Zip the `io_xplane2blender` folder
-3. In Blender: **Edit → Preferences → Add-ons → Install from File**
-4. Select the zip, then enable **"Import-Export: XPlane2Blender"**
-5. Restart Blender
+1. If you have **XPlane2Blender** installed, disable it first. Hangar41 is built on it and uses the same add-on folder name and settings, so only one can be enabled.
+2. Download or clone this repo
+3. Zip the `io_xplane2blender` folder
+4. In Blender: **Edit → Preferences → Add-ons → Install from File**
+5. Select the zip, then enable **"Import-Export: Hangar41: X-Plane .obj Import/Export"**
+6. Restart Blender
 
 ---
 
@@ -73,10 +83,14 @@ Bug reports with the offending `.obj` attached are the most useful thing you can
 
 ### Export
 
+An import fills these in from the `.obj` (export type, textures, cockpit regions, LODs), so a straight round-trip needs no setup:
+
 1. Open the **Scene Properties** panel
 2. Scroll to the **X-Plane** section
-3. Set your X-Plane version, collection type, and texture paths
+3. Check your X-Plane version, collection type, and texture paths
 4. Click **Export OBJs**
+
+X-Plane needs texture paths relative to the `.obj`, so export to a folder on the same drive as the textures.
 
 ---
 

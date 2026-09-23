@@ -93,10 +93,14 @@ class IMPORT_OT_ImportXPlane(bpy.types.Operator, ImportHelper):
 
         warnings = logger.findWarnings()
         if warnings:
+            # What's missing from a later export matters most, so show that one
+            shown = next(
+                (w for w in warnings if w["message"].startswith("Not imported")),
+                warnings[0],
+            )
             self.report(
                 {"WARNING"},
-                f"Imported '{filename}' with {len(warnings)} warning(s),"
-                f" first: {warnings[0]['message']}"
+                f"Imported '{filename}' with {len(warnings)} warning(s): {shown['message']}"
                 f" (see '{log_name}' in the Text Editor for all)",
             )
         else:

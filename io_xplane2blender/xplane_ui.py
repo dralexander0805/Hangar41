@@ -197,32 +197,22 @@ def scene_layout(layout: bpy.types.UILayout, scene: bpy.types.Scene):
     else:
         layout.row().label(text="XPlane2Blender Version: " + str(xp2b_ver), icon="NONE")
 
-    needs_warning = False
+    if xp2b_ver.build_type in {
+        xplane_constants.BUILD_TYPE_ALPHA,
+        xplane_constants.BUILD_TYPE_BETA,
+        xplane_constants.BUILD_TYPE_DEV,
+    }:
+        layout.row().label(
+            text=f"Hangar41 {xp2b_ver.build_type}: keep backups of your .blend files",
+            icon="INFO",
+        )
+
+    # Only builds made with mkbuild.py are numbered; that only matters to developers
     if (
-        xp2b_ver.build_type == xplane_constants.BUILD_TYPE_ALPHA
-        or xp2b_ver.build_type == xplane_constants.BUILD_TYPE_BETA
+        scene.xplane.plugin_development
+        and xp2b_ver.build_number == xplane_constants.BUILD_NUMBER_NONE
     ):
-        layout.row().label(
-            text="BEWARE: "
-            + xp2b_ver.build_type.capitalize()
-            + " versions can damage files!",
-            icon="ERROR",
-        )
-        needs_warning = True
-    elif xp2b_ver.build_type == xplane_constants.BUILD_TYPE_DEV:
-        layout.row().label(
-            text="Developer versions are DANGEROUS and UNSTABLE!", icon="ORPHAN_DATA"
-        )
-        needs_warning = True
-
-    if xp2b_ver.build_number == xplane_constants.BUILD_NUMBER_NONE:
-        layout.row().label(
-            text="No build number: addon may be EXTRA UNSTABLE.", icon="CANCEL"
-        )
-        needs_warning = True
-
-    if needs_warning is True:
-        layout.row().label(text="     Make backups or switch to a more stable release!")
+        layout.row().label(text="No build number (not built with mkbuild.py)", icon="INFO")
 
     exp_box = layout.box()
     exp_box.label(text="Root Collections")

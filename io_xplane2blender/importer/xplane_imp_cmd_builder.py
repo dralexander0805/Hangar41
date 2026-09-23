@@ -867,18 +867,17 @@ class ImpCommandBuilder:
                 # print("trans, case B - as dynamic")
                 add_as_dynamic()
             elif r_xyz1 != r_xyz2 and r_v1 == r_v2:
-                # print("trans, case C - as odd dynamic")
-                add_as_dynamic()
-                # TODO: make warning
-                line = "bleh"
+                # Two positions but no dataref range to move between them, so
+                # it can only ever sit at the first; the exporter would refuse a
+                # dataref whose min equals its max, so keep it static
                 logger.warn(
-                    f"ANIM_trans"
-                    f"    {c for c in xyz1}"
-                    f"    {c for c in xyz2}"
-                    f"    {v1} {v2} {path}`"
-                    f"on line {line} has different locations but the same dataref values - it is malformed."
-                    f"Fix {self._anim_intermediate_stack[-1].intermediate_datablock}"
+                    f"ANIM_trans for '{path}' has two positions but the same dataref"
+                    f" value ({v1}) for both, so it can't move. Imported as a static"
+                    f" translation to the first position"
                 )
+                self._bake_matrix_stack[-1] = self._bake_matrix_stack[
+                    -1
+                ] @ Matrix.Translation(xyz1)
             elif r_xyz1 != r_xyz2 and r_v1 != r_v2:
                 # print("trans, case D - dynamic")
                 add_as_dynamic()
@@ -917,18 +916,15 @@ class ImpCommandBuilder:
                 # print("rot, case B - as dynamic")
                 add_as_dynamic()
             elif r_r1 != r_r2 and r_v1 == r_v2:
-                # print("rot, case C - as odd dynamic")
-                add_as_dynamic()
-                # TODO: make warning
-                line = "bleh"
+                # Same reasoning as ANIM_trans above
                 logger.warn(
-                    f"ANIM_rotate"
-                    f"    {Vector(c for c in dxyz)}"
-                    f"    {r1} {r2}"
-                    f"    {v1} {v2}"
-                    f"    {path}"
-                    f"\nnon line {line} has different rotation but the same dataref values - it is malformed."
-                    f"Fix {self._anim_intermediate_stack[-1].intermediate_datablock}"
+                    f"ANIM_rotate for '{path}' has two angles ({r1}, {r2}) but the same"
+                    f" dataref value ({v1}) for both, so it can't move. Imported as a"
+                    f" static rotation of {r1} degrees"
+                )
+                self._bake_matrix_stack[-1] = (
+                    self._bake_matrix_stack[-1]
+                    @ Quaternion(dxyz, math.radians(r1)).to_matrix().to_4x4()
                 )
             elif r_r1 != r_r2 and r_v1 != r_v2:
                 # print("rot, case D - dynamic")

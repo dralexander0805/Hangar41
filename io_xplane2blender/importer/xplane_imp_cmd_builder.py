@@ -687,6 +687,8 @@ class ImpCommandBuilder:
             _AnimIntermediateStackEntry
         ] = collections.deque()
         self._anim_count: Sequence[int] = collections.deque()
+        # Frames opened by an animation command outside ANIM_begin/ANIM_end
+        self._implicit_root_frames = 0
         self._bake_matrix_stack: Deque[Matrix] = collections.deque((Matrix(),))
         self._pending_manip: Optional[IntermediateManipulator] = None
         self._pending_attrs: IntermediateAttributes = IntermediateAttributes()
@@ -719,6 +721,14 @@ class ImpCommandBuilder:
         """
 
         def begin_new_frame() -> None:
+            if not self._anim_count:
+                # An animation command outside ANIM_begin/ANIM_end. X-Plane
+                # applies it to everything after it in the file (Laminar's
+                # Citation X hides its wings this way), so open a frame at the
+                # root that is never closed.
+                self._anim_count.append(0)
+                self._bake_matrix_stack.append(self._bake_matrix_stack[-1].copy())
+                self._implicit_root_frames += 1
             if not self._top_intermediate_datablock:
                 parent = self.root_intermediate_datablock
             else:
@@ -788,6 +798,9 @@ class ImpCommandBuilder:
             self._anim_count.append(0)
             self._bake_matrix_stack.append(self._bake_matrix_stack[-1].copy())
         elif directive == "ANIM_end":
+            if len(self._anim_count) <= self._implicit_root_frames:
+                logger.warn("ANIM_end without a matching ANIM_begin, ignored")
+                return
             for i in range(self._anim_count.pop()):
                 self._anim_intermediate_stack.pop()
             self._bake_matrix_stack.pop()
@@ -2279,6 +2292,22 @@ class ImpCommandBuilder:
     def _apply_manip_to_object(
         self, ob: bpy.types.Object, m: IntermediateManipulator
     ) -> None:
+        if (
+            m.manip_type == MANIP_DRAG_ROTATE_DETENT
+            and not m.has_axis_detented
+            and all(start == end and height == 0 for start, end, height in m.axis_detent_ranges)
+        ):
+            # Only zero-width, zero-height ranges (Laminar's tools write
+            # "ATTR_axis_detent_range 0 0 0" after plain handles). They do
+            # nothing, and a detent type would need a lift animation the OBJ
+            # doesn't have, so it would fail to export. Keep it plain.
+            logger.warn(
+                f"'{ob.name}': dropped {len(m.axis_detent_ranges)} empty"
+                " ATTR_axis_detent_range (zero width and height), kept as a plain drag_rotate"
+            )
+            m.manip_type = MANIP_DRAG_ROTATE
+            m.axis_detent_ranges = []
+
         manip = ob.xplane.manip
         # Only mark as an active manipulator when the OBJ is a cockpit file.
         # Non-cockpit OBJs that contain ATTR_manip_* data still get the manip

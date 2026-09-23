@@ -61,6 +61,12 @@ In Blender, imports are textured in the viewport and named after what they do: `
   </tr>
 </table>
 
+It isn't limited to cockpits. Whole aircraft, helicopters and scenery objects import too:
+
+<p align="center">
+  <img src="docs/images/showcase.jpg" alt="Eleven models imported with Hangar41 and rendered in Blender: an Airbus A330, the Boeing 737-800 flight deck, a Baron 58, a Cessna 172, a Piper Super Cub, a Stinson L-5, a Robinson R22, an airport fire truck, a hangar, the Statue of Liberty and the Eiffel Tower" width="100%">
+</p>
+
 ## Install
 
 Hangar41 needs **Blender 4.1** and reads objects from **X-Plane 11 and 12**.
@@ -91,6 +97,7 @@ Hangar41 is in beta. Keep backups of your `.blend` files.
 - `LIGHT_SPILL_CUSTOM`, old-style `LIGHTS` vertex lights, and `EMITTER`
 - attributes from before X-Plane 10: `ATTR_cull`, `ATTR_no_cull`, `ATTR_diffuse_rgb`, `ATTR_emission_rgb`
 - detent ranges on a drag manipulator whose `ATTR_axis_detented` has a zero axis (the manipulator itself is kept)
+- `ATTR_axis_detent_range 0 0 0` on a plain drag-rotate handle, which some tools write and which does nothing (the handle is kept)
 
 **Some things are written differently but mean the same to X-Plane.** A header `GLOBAL_specular` becomes per-material `ATTR_shiny_rat`, static `ANIM_rotate` and `ANIM_trans` are baked into the geometry, and state on invisible click zones is left out.
 

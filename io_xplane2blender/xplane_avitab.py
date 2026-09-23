@@ -273,7 +273,13 @@ class OBJECT_OT_add_xplane_avitab_screen(bpy.types.Operator):
         coll = bpy.data.collections.new("AviTab Tablet")
         context.scene.collection.children.link(coll)
         coll.xplane.is_exportable_collection = True
-        coll.xplane.layer.name = "avitab_tablet"
+        # Its own file name, or a second tablet would overwrite the first
+        taken = {c.xplane.layer.name for c in bpy.data.collections}
+        name, n = "avitab_tablet", 1
+        while name in taken:
+            n += 1
+            name = f"avitab_tablet_{n}"
+        coll.xplane.layer.name = name
         coll.xplane.layer.export_type = EXPORT_TYPE_AIRCRAFT
 
         tablet = bpy.data.objects.new("AviTab Tablet", mesh)
@@ -327,7 +333,15 @@ class EXPORT_OT_xplane_avitab_json(bpy.types.Operator, ExportHelper):
         if screen is None:
             self.report({"ERROR"}, "No AviTab screen; add one with Add > Mesh > AviTab Screen")
             return {"CANCELLED"}
-        panel = {key: int(screen[AVITAB_PROP][key]) for key in ("left", "bottom", "width", "height")}
+        keys = ("left", "bottom", "width", "height")
+        panel = {key: int(screen[AVITAB_PROP][key]) for key in keys}
+        # AviTab draws one rectangle; screens mapped elsewhere stay blank
+        others = [
+            ob.name
+            for ob in context.scene.objects
+            if AVITAB_PROP in ob
+            and {k: int(ob[AVITAB_PROP][k]) for k in keys} != panel
+        ]
         panel["enabled"] = self.enabled
         if self.hide_header:
             panel["hide_header"] = True
@@ -337,7 +351,14 @@ class EXPORT_OT_xplane_avitab_json(bpy.types.Operator, ExportHelper):
         with open(path, "w") as f:
             json.dump({"panel": panel}, f, indent=4)
             f.write("\n")
-        self.report({"INFO"}, f"Wrote {path}; it goes next to the .acf")
+        if others:
+            self.report(
+                {"WARNING"},
+                f"Wrote {path} for '{screen.name}'. AviTab draws in one rectangle, so"
+                f" {', '.join(others)} won't show it; give them the same one",
+            )
+        else:
+            self.report({"INFO"}, f"Wrote {path}; it goes next to the .acf")
         return {"FINISHED"}
 
 

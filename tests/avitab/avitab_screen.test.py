@@ -81,4 +81,29 @@ class TestAviTabScreen(XPlaneTestCase):
         )
 
 
+    def test_two_tablets_export_separately(self) -> None:
+        # Pilot and copilot tablets mirroring the same AviTab
+        bpy.ops.wm.read_homefile(use_empty=True)
+        root = Path(tempfile.mkdtemp())
+        (root / "cockpit.obj").write_text(COCKPIT)
+        bpy.ops.import_scene.xplane_obj(filepath=str(root / "cockpit.obj"))
+        layer_coll = bpy.context.view_layer.layer_collection.children["cockpit"]
+        for x in (-0.3, 0.3):
+            bpy.context.view_layer.active_layer_collection = layer_coll
+            bpy.context.scene.cursor.location = (x, 0.1, 0.9)
+            self.assertEqual(bpy.ops.object.add_xplane_avitab_screen(), {"FINISHED"})
+
+        out = root / "out"
+        self.assertEqual(
+            bpy.ops.export.xplane_obj(filepath=str(out) + os.sep), {"FINISHED"}
+        )
+        self.assertEqual(
+            sorted(p.name for p in out.glob("*.obj")),
+            ["avitab_tablet.obj", "avitab_tablet_2.obj", "cockpit.obj"],
+        )
+        cockpit = (out / "cockpit.obj").read_text()
+        # Written once: the second screen needs the state the first set
+        self.assertEqual(cockpit.count("avitab/brightness"), 1)
+
+
 runTestCases([TestAviTabScreen])

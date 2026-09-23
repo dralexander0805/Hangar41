@@ -17,8 +17,11 @@ class TestParamLightParams(XPlaneTestCase):
         self.assertEqual(light.comment, "0 spaces, number starts comment with uneven and a   trailing  space ")
 
     def test_illegal_params_content(self):
+        # A parameter that starts with a number ("2850cd", as Laminar's ships
+        # write) is read as X-Plane reads it, with a warning; the rest error
         out = self.exportLayer(1)
-        self.assertLoggerErrors(3)
+        self.assertGreaterEqual(len(logger.findWarnings()), 2)
+        self.assertLoggerErrors(1)
 
     def test_unused_param_pass(self):
         filename = inspect.stack()[0].function
@@ -30,9 +33,11 @@ class TestParamLightParams(XPlaneTestCase):
             filename,
         )
 
-    def test_unused_param_fail(self):
+    def test_unused_param_warns(self):
+        # Too few params for the bundled lights.txt is written as is with a
+        # warning: X-Crafts' ERJ and KJFK scenery do this
         out = self.exportLayer(3)
-        self.assertLoggerErrors(2)
+        self.assertLoggerWarnsInstead(2)
 
 runTestCases([TestParamLightParams])
 

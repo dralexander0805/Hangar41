@@ -23,11 +23,17 @@ class TestLibraryHeader(XPlaneTestCase):
         except xplane_imp_parser.UnrecoverableParserError:
             self.fail(msg="test_library_header_good.obj did not parse correctly")
 
+    def test_library_header_blank_lines(self) -> None:
+        # X-Plane allows blank lines between I, 800 and OBJ; Laminar's own
+        # OilPlatform.obj has them
+        xplane_imp_parser.import_obj(
+            pathlib.Path(__dirname__, "fixtures", "test_library_header_bad_nl_in_middle.obj")
+        )
+
     def test_library_header_bad(self) -> None:
         files = [
             "test_library_header_bad_comment.obj",
             "test_library_header_bad_empty.obj",
-            "test_library_header_bad_nl_in_middle.obj",
             "test_library_header_bad_no_800.obj",
             "test_library_header_bad_no_I.obj",
             "test_library_header_bad_no_OBJ.obj",

@@ -1,0 +1,12 @@
+I
+800
+OBJ
+
+POINT_COUNTS	0	0	0	0
+
+	ANIM_begin
+	ANIM_rotate	-0.00000004	-0.8645072	-0.50262046	90	90
+	LIGHT_NAMED	taillight -3.01572275 4.48423624 2.60711408
+	ANIM_end
+
+# Build with Blender 2.78 (sub 0) (build b'4bb1e22'). Exported with XPlane2Blender 3.4.0-beta.4+1.NO_BUILD_NUMBR

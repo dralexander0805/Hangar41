@@ -20,6 +20,12 @@ class TestLodValidation(XPlaneTestCase):
         out = self.exportExportableRoot(name[5:])
         self.assertLoggerErrors(num_errors)
 
+    def _test_warning_case(self, name:str, num_warnings:int=1):
+        # Order, mixing and gaps are warnings: shipped aircraft and scenery
+        # do all three (the AW139, RescueX, simHeaven) and X-Plane loads them
+        out = self.exportExportableRoot(name[5:])
+        self.assertLoggerWarnsInstead(num_warnings)
+
     def _test_passing_case(self, filename:str):
         self.assertExportableRootExportEqualsFixture(
             filename[5:],
@@ -32,37 +38,31 @@ class TestLodValidation(XPlaneTestCase):
         filename = inspect.stack()[0].function
         self._test_fail_case(filename)
 
-    def test_fail_2b_additive_ordered_out_of_order(self)->None:
-        filename = inspect.stack()[0].function
-        self._test_fail_case(filename)
+    def test_warn_2b_additive_ordered_out_of_order(self)->None:
+        self._test_warning_case("test_fail_2b_additive_ordered_out_of_order", 1)
 
     def test_fail_3a_selective_ordered_backwards(self)->None:
         filename = inspect.stack()[0].function
         self._test_fail_case(filename)
 
-    def test_fail_3b_selective_ordered_out_of_order(self)->None:
-        filename = inspect.stack()[0].function
-        self._test_fail_case(filename, num_errors=2)
+    def test_warn_3b_selective_ordered_out_of_order(self)->None:
+        self._test_warning_case("test_fail_3b_selective_ordered_out_of_order", 2)
 
     def test_fail_3c_selective_ordered_out_of_order_decreasing_ranges(self)->None:
         filename = inspect.stack()[0].function
         self._test_fail_case(filename,num_errors=2)
 
-    def test_fail_4a_additive_to_selective_mixed(self)->None:
-        filename = inspect.stack()[0].function
-        self._test_fail_case(filename)
+    def test_warn_4a_additive_to_selective_mixed(self)->None:
+        self._test_warning_case("test_fail_4a_additive_to_selective_mixed", 1)
 
-    def test_fail_4b_selective_to_additive_mixed(self)->None:
-        filename = inspect.stack()[0].function
-        self._test_fail_case(filename)
+    def test_warn_4b_selective_to_additive_mixed(self)->None:
+        self._test_warning_case("test_fail_4b_selective_to_additive_mixed", 1)
 
-    def test_fail_5a_selective_far_near_equal_gap(self)->None:
-        filename = inspect.stack()[0].function
-        self._test_fail_case(filename, num_errors=2)
+    def test_warn_5a_selective_far_near_equal_gap(self)->None:
+        self._test_warning_case("test_fail_5a_selective_far_near_equal_gap", 2)
 
-    def test_fail_5b_selective_far_near_equal_overlap(self)->None:
-        filename = inspect.stack()[0].function
-        self._test_fail_case(filename, num_errors=2)
+    def test_warn_5b_selective_far_near_equal_overlap(self)->None:
+        self._test_warning_case("test_fail_5b_selective_far_near_equal_overlap", 2)
 
     def test_fail_6a_selective_1st_near_is_0(self)->None:
         filename = inspect.stack()[0].function

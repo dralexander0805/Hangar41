@@ -31,11 +31,12 @@ class TestCockpitDevice(XPlaneTestCase):
                     filename,
                 )
 
-    def test_failing_cases(self) -> None:
+    def test_no_buses_warns(self) -> None:
+        # Carenado's S550 and Laminar's X-Plane 11 737 use bus 0
         out = self.exportExportableRoot(
             "device_fails_no_buses",
         )
-        self.assertLoggerErrors(1)
+        self.assertLoggerWarnsInstead(1)
 
 
 runTestCases([TestCockpitDevice])

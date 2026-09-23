@@ -182,6 +182,22 @@ class TestLenientNumbersAndHeader(XPlaneTestCase):
             self.assertTrue(ob.xplane.override_lods)
             self.assertTrue(ob.xplane.lod[0])
 
+    def test_header_after_point_counts(self) -> None:
+        # MisterX's library: POINT_COUNTS first, then GLOBAL_specular and
+        # NORMAL_METALNESS, then an IF block
+        import_obj(
+            write_obj(
+                "late_header",
+                "I\n800\nOBJ\n"
+                + BODY.replace("VT 0 0 0", "GLOBAL_specular 0.25\nIF NOT SCENERY_SHADOWS\nENDIF\nVT 0 0 0", 1)
+                + "TRIS 0 3\n",
+            )
+        )
+        (mesh,) = self.meshes()
+        self.assertAlmostEqual(mesh.material_slots[0].material.specular_intensity, 0.25)
+        layer = bpy.data.collections["late_header"].xplane.layer
+        self.assertNotIn("IF", [attr.name for attr in layer.customAttributes])
+
     def test_garbage_still_fails(self) -> None:
         with self.assertRaises(xplane_imp_parser.UnrecoverableParserError):
             import_obj(

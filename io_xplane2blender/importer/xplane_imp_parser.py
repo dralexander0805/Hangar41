@@ -139,11 +139,16 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             continue
 
         if in_header and (
-            directive in {"VT", "IDX", "IDX10", "TRIS", "ANIM_begin", "LINES", "LIGHTS"}
+            directive in {"VT", "IDX", "IDX10", "TRIS", "ANIM_begin", "LINES", "LIGHTS", "ATTR_LOD"}
+            # Conditionals are body lines; never carry an IF into the header
+            or directive in {"IF", "ELSE", "ENDIF"}
             or directive in POINT_DIRECTIVES
+            or directive in ATTR_STATE_DIRECTIVES
+            or directive.startswith(("ATTR_manip_", "ATTR_axis_"))
         ):
-            # POINT_COUNTS was missing. simHeaven's seamarks start with a
-            # LIGHT_NAMED, which was taken for a header line and lost
+            # The header ends where the body starts. Not at POINT_COUNTS:
+            # MisterX's library puts TEXTURE, GLOBAL_specular and more after
+            # it, and simHeaven's seamarks have none and start with a light
             in_header = False
 
         try:
@@ -202,7 +207,7 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                 builder.uses_draped = True
                 builder.build_cmd(directive, components)
             elif directive == "POINT_COUNTS":
-                in_header = False
+                pass
             elif in_header and directive in HEADER_STATE:
                 builder.set_header_state(directive, components)
             elif in_header and directive not in {"A", "I"}:

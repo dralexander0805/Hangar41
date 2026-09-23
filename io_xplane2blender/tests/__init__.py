@@ -37,7 +37,10 @@ from io_xplane2blender.xplane_types import (
 
 FLOAT_TOLERANCE = 0.0001
 
-__dirname__ = os.path.dirname(__file__)
+# The real location: tests.py loads the add-on through a link to this checkout,
+# and paths built from the link's location would miss the repo
+_real_file = os.path.realpath(__file__)
+__dirname__ = os.path.dirname(_real_file)
 
 FilterLinesCallback = Callable[[List[Union[float, str]]], bool]
 
@@ -614,14 +617,20 @@ class XPlaneTestCase(unittest.TestCase):
         else:
             logger.clearMessages()
 
-    # TODO: Must filter warnings to have this be useful
-    # Method: assertLoggerWarnings
-    #
-    # expected_logger_warnings - The number of warnings you expected to have happen
-    # asserts the number of warnings and clears the logger of all messages
-    # def assertLoggerWarnings(self, expected_logger_warnings):
-    #    self.assertEqual(len(logger.findWarnings()), expected_logger_warnings)
-    #    logger.clearMessages()
+    def assertLoggerWarnsInstead(self, min_warnings: int = 1) -> None:
+        """
+        Asserts no errors and at least min_warnings warnings, then clears the
+        logger. For what the exporter now allows with a warning, because
+        shipped aircraft and scenery do it. Other warnings (unknown light
+        names, say) can come along, hence "at least".
+        """
+        found_warnings = len(logger.findWarnings())
+        self.assertGreaterEqual(
+            found_warnings,
+            min_warnings,
+            f"Expected at least {min_warnings} logger warnings, got {found_warnings}",
+        )
+        self.assertLoggerErrors(0)
 
     def assertLayerExportEqualsFixture(
         self,
@@ -864,12 +873,12 @@ class XPlaneAnimationTestCase(XPlaneTestCase):
 
 def get_source_folder() -> pathlib.Path:
     """Returns the full path to the addon folder"""
-    return pathlib.Path(__file__).parent
+    return pathlib.Path(_real_file).parent
 
 
 def get_project_folder() -> pathlib.Path:
     """Returns the full path to the project folder"""
-    return pathlib.Path(__file__).parent.parent.parent
+    return pathlib.Path(_real_file).parent.parent.parent
 
 
 def get_tests_folder() -> pathlib.Path:

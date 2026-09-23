@@ -14,9 +14,10 @@ __dirname__ = os.path.dirname(__file__)
             #("OBJ_DIRECTIVE" in line[0] or\
 
 class TestKnownVsUnknownNamedVsParam(XPlaneTestCase):
-    def test_01_known_param_should_error(self):
+    def test_01_known_param_as_named_warns(self):
+        # Written as is with a warning: shipped add-ons do this (X-Crafts)
         out = self.exportLayer(0)
-        self.assertLoggerErrors(1)
+        self.assertLoggerWarnsInstead(1)
 
     def test_02_known_named_should_pass(self):
         out = self.exportLayer(1)
@@ -36,9 +37,10 @@ class TestKnownVsUnknownNamedVsParam(XPlaneTestCase):
         out = self.exportLayer(4)
         self.assertLoggerErrors(1)
 
-    def test_06_known_named_fake_params_should_error(self):
+    def test_06_known_named_fake_params_warns(self):
+        # Written as is with a warning: the AW139 does this
         out = self.exportLayer(5)
-        self.assertLoggerErrors(1)
+        self.assertLoggerWarnsInstead(1)
 
     def test_07_known_named_empty_param_should_error(self):
         out = self.exportLayer(6)

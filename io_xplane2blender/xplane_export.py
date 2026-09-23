@@ -239,6 +239,7 @@ class EXPORT_OT_ExportXPlane(bpy.types.Operator, ExportHelper):
         fullpath = os.path.abspath(
             os.path.join(os.path.dirname(bpy.context.blend_data.filepath), relpath)
         )
+        xplaneFile.export_path = fullpath
         out = xplaneFile.write()
 
         if logger.hasErrors():

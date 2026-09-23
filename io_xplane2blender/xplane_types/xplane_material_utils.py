@@ -217,7 +217,9 @@ def validatePanel(mat: XPlaneMaterial) -> MaterialValidationMsgs:
     warnings = []  # type: List[str]
 
     if mat.options.lightLevel:
-        errors.append("Must not override light level.")
+        # Shipped cockpits leave ATTR_light_level on over their panel (the
+        # Metro III, the H145), so an import has it too. Keep it, but say so.
+        warnings.append("Overrides light level while part of the panel.")
 
     if mat.options.draw:
         if mat.textureLit:
@@ -233,7 +235,8 @@ def validatePanel(mat: XPlaneMaterial) -> MaterialValidationMsgs:
         errors.append("Must not be draped.")
 
     if mat.options.surfaceType != "none":
-        errors.append('Must have the surface type "none".')
+        # X-Crafts' ERJ cockpit has one; kept so an import still exports
+        warnings.append('Has a surface type while part of the panel.')
 
     return errors, warnings
 
@@ -244,7 +247,8 @@ def validateCockpit(mat: XPlaneMaterial) -> MaterialValidationMsgs:
 
     if mat.options.cockpit_feature == COCKPIT_FEATURE_DEVICE:
         if not any((mat.options.get(f"device_bus_{i}") for i in range(6))):
-            errors.append("Cockpit device must specify at least one bus")
+            # Carenado's S550 and Laminar's X-Plane 11 737 FMS screens use bus 0
+            warnings.append("Cockpit device doesn't specify a bus")
 
     if mat.options.cockpit_feature == COCKPIT_FEATURE_PANEL:
         errors.append("Cockpit .obj Material cannot be 'Part Of Panel'.")
@@ -261,7 +265,8 @@ def validateAircraft(mat: XPlaneMaterial) -> MaterialValidationMsgs:
 
     if mat.options.cockpit_feature == COCKPIT_FEATURE_DEVICE:
         if not any((mat.options.get(f"device_bus_{i}") for i in range(6))):
-            errors.append("Cockpit device must specify at least one bus")
+            # Carenado's S550 and Laminar's X-Plane 11 737 FMS screens use bus 0
+            warnings.append("Cockpit device doesn't specify a bus")
 
     if mat.options.cockpit_feature == COCKPIT_FEATURE_PANEL:
         errors.append("Aircraft .obj Material cannot be 'Part Of Panel'.")
@@ -288,8 +293,10 @@ def validateDraped(mat: XPlaneMaterial) -> MaterialValidationMsgs:
     if mat.options.cockpit_feature == COCKPIT_FEATURE_PANEL:
         errors.append("Must not be part of the cockpit panel.")
 
+    # Shipped scenery has both on draped geometry (DD's KSEA asphalt, the
+    # Handy Objects Library); kept so an import still exports
     if mat.options.surfaceType != "none":
-        errors.append('Must have the surface type "none".')
+        warnings.append("Has a surface type while draped.")
 
     if not mat.options.draw:
         errors.append("Must have draw enabled.")
@@ -298,7 +305,7 @@ def validateDraped(mat: XPlaneMaterial) -> MaterialValidationMsgs:
         errors.append("Must have camera collision disabled.")
 
     if mat.options.poly_os > 0:
-        errors.append("Must not have polygon offset.")
+        warnings.append("Has a polygon offset while draped.")
 
     if mat.blenderObject.xplane.manip.enabled:
         errors.append("Must not be a manipulator.")

@@ -64,7 +64,10 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
         logger.error(msg)
         raise UnrecoverableParserError(msg) from e
 
-    header = [line.strip() for line in lines[:3]]
+    # X-Plane skips blank lines in the header; some of its own scenery has them
+    header_at = [i for i, line in enumerate(lines[:64]) if line.strip()][:3]
+    header = [lines[i].strip() for i in header_at]
+    body_start = header_at[-1] + 1 if header_at else 0
     if not (header[:1] in (["A"], ["I"]) and header[1:3] == ["800", "OBJ"]):
         found = " / ".join(repr(line) for line in header) or "an empty file"
         msg = (
@@ -94,8 +97,18 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
     # Everything before POINT_COUNTS is the header
     in_header = True
     unsupported: Dict[str, int] = collections.Counter()
-    # start=4 so lineno matches what a text editor shows
-    for lineno, line in enumerate(map(str.strip, lines[3:]), start=4):
+    nonstandard: Dict[str, int] = collections.Counter()
+    # A line to parse again, with its run-together numbers split
+    reparse: List[Tuple[int, str]] = []
+
+    def body_lines():
+        # 1-based so lineno matches what a text editor shows
+        for item in enumerate(map(str.strip, lines[body_start:]), start=body_start + 1):
+            yield item
+            while reparse:
+                yield reparse.pop()
+
+    for lineno, line in body_lines():
         to_parse, comment = re.match(pattern, line).groups()[0:2]
         try:
             if comment.startswith("# name_hint:"):
@@ -109,6 +122,13 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             continue
         else:
             directive, *components = to_parse.split()
+            # SketchUp2XPlane writes VERTEX for VT, and IDX lines of up to 10
+            if directive == "VERTEX":
+                directive = "VT"
+                nonstandard["VERTEX (read as VT)"] += 1
+            elif directive == "IDX" and len(components) > 1:
+                directive = "IDX10"
+                nonstandard["IDX with several indices"] += 1
 
         if directive == "SKIP":
             skip = not skip
@@ -118,8 +138,18 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
         if skip:
             continue
 
-        if in_header and directive in {"VT", "IDX", "IDX10", "TRIS", "ANIM_begin", "LINES"}:
-            in_header = False  # POINT_COUNTS was missing
+        if in_header and (
+            directive in {"VT", "IDX", "IDX10", "TRIS", "ANIM_begin", "LINES", "LIGHTS", "ATTR_LOD"}
+            # Conditionals are body lines; never carry an IF into the header
+            or directive in {"IF", "ELSE", "ENDIF"}
+            or directive in POINT_DIRECTIVES
+            or directive in ATTR_STATE_DIRECTIVES
+            or directive.startswith(("ATTR_manip_", "ATTR_axis_"))
+        ):
+            # The header ends where the body starts. Not at POINT_COUNTS:
+            # MisterX's library puts TEXTURE, GLOBAL_specular and more after
+            # it, and simHeaven's seamarks have none and start with a light
+            in_header = False
 
         try:
             # TODO: Rewrite using giant switch-ish table and functions so it is more neat
@@ -157,8 +187,27 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                 if components:
                     named, found = _find_texture(filepath, components[0], directive)
                     builder.set_texture(directive, named, found)
+            elif directive == "TEXTURE_DRAPED" and components:
+                builder.uses_draped = True
+                named, _ = _find_texture(filepath, components[0], directive)
+                builder.set_texture(directive, named, None)
+            elif directive == "TEXTURE_DRAPED_NORMAL" and len(components) > 1:
+                # "TEXTURE_DRAPED_NORMAL <scale> <path>"; the exporter always writes 1.0
+                if components[0] not in {"1", "1.0"}:
+                    logger.warn(
+                        f"Line {lineno}: TEXTURE_DRAPED_NORMAL scale {components[0]}"
+                        " will be exported as 1.0"
+                    )
+                named, _ = _find_texture(filepath, components[1], directive)
+                builder.set_texture(directive, named, None)
+            elif directive == "PARTICLE_SYSTEM" and components:
+                # A path relative to the .obj, like a texture
+                builder.particle_system = (filepath.parent / components[0]).resolve()
+            elif directive == "ATTR_draped":
+                builder.uses_draped = True
+                builder.build_cmd(directive, components)
             elif directive == "POINT_COUNTS":
-                in_header = False
+                pass
             elif in_header and directive in HEADER_STATE:
                 builder.set_header_state(directive, components)
             elif in_header and directive not in {"A", "I"}:
@@ -188,7 +237,7 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                     builder.build_cmd(directive, idx)
             elif directive == "IDX10":
                 # idx error etc
-                builder.build_cmd(directive, *map(int, components[:11]))
+                builder.build_cmd(directive, *map(int, components[:10]))
             elif directive == "TRIS":
                 start_idx = int(components[0])
                 count = int(components[1])
@@ -208,6 +257,13 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                 builder.build_cmd(directive, value, location)
             elif directive == "ANIM_trans_end":
                 pass
+            elif directive in {"ANIM_hide", "ANIM_show"} and not all(
+                map(_NUMBER_CHARS.fullmatch, components[:2] or [""])
+            ):
+                # A truncated line, like "ANIM_hide arginal/groundtraffic/speed"
+                logger.warn(
+                    f"Line {lineno}: {directive} has no values, left out. Line was: '{line}'"
+                )
             elif directive in {"ANIM_hide", "ANIM_show"}:
                 v1, v2 = map(float, components[:2])
                 dataref_path = dataref_at(components, 2, lineno, directive)
@@ -228,28 +284,12 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             elif directive == "ANIM_trans":
                 xyz1 = vec_x_to_b(list(map(float, components[:3])))
                 xyz2 = vec_x_to_b(list(map(float, components[3:6])))
-                v1, v2 = (0, 0)
-                path = "none"
-
-                try:
-                    v1 = float(components[6])
-                    v2 = float(components[7])
-                    path = components[8]
-                except IndexError as e:
-                    pass
+                v1, v2, path = _values_and_dataref(components[6:])
                 builder.build_cmd(directive, xyz1, xyz2, v1, v2, path, name_hint=name_hint)
             elif directive == "ANIM_rotate":
                 dxyz = vec_x_to_b(list(map(float, components[:3])))
                 r1, r2 = map(float, components[3:5])
-                v1, v2 = (0, 0)
-                path = "none"
-
-                try:
-                    v1 = float(components[5])
-                    v2 = float(components[6])
-                    path = components[7]
-                except IndexError:
-                    pass
+                v1, v2, path = _values_and_dataref(components[5:])
                 builder.build_cmd(
                     directive, dxyz, r1, r2, v1, v2, path, name_hint=name_hint
                 )
@@ -275,6 +315,16 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
         except UnrecoverableParserError:
             raise
         except (IndexError, ValueError, TypeError) as e:
+            # components may be half converted already; start from the text
+            tokens = to_parse.split()[1:]
+            split = _split_run_on_numbers(tokens)
+            if isinstance(e, ValueError) and split != tokens:
+                logger.warn(
+                    f"Line {lineno}: numbers run together, read as"
+                    f" '{' '.join(split)}' like X-Plane does. Line was: '{line}'"
+                )
+                reparse.append((lineno, " ".join([directive, *split])))
+                continue
             detail = (
                 "a value is missing" if isinstance(e, IndexError) else str(e) or type(e).__name__
             )
@@ -285,6 +335,11 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
             logger.error(msg)
             raise UnrecoverableParserError(msg) from e
 
+    if nonstandard:
+        logger.warn(
+            "Not standard OBJ8, imported anyway: "
+            + ", ".join(f"{d} x{n}" for d, n in nonstandard.most_common())
+        )
     if unsupported:
         logger.warn(
             "Not imported, so these will be missing from an export: "
@@ -295,6 +350,46 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
     return "FINISHED"
 
 
+def _values_and_dataref(rest: List[str]) -> Tuple[float, float, str]:
+    """
+    The tail of a static ANIM_trans or ANIM_rotate: 'v1 v2 dataref', or nothing.
+    Some exporters write just the dataref ('... none'); there are no values then.
+    """
+    if not rest:
+        return 0, 0, "none"
+    if not _NUMBER_CHARS.fullmatch(rest[0]):
+        return 0, 0, rest[0]
+    v1 = float(rest[0])
+    v2 = float(rest[1]) if len(rest) > 1 else 0
+    return v1, v2, rest[2] if len(rest) > 2 else "none"
+
+
+_NUMBER_CHARS = re.compile(r"[-+0-9.eE]*[0-9][-+0-9.eE]*")
+_NUMBER_PREFIX = re.compile(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?")
+
+
+def _split_run_on_numbers(tokens: List[str]) -> List[str]:
+    """
+    X-Plane reads numbers like C's strtod: each ends where it stops parsing and
+    the next starts right there, so '-0.1060-0.178' is two numbers and '-90.0.0'
+    is '-90.0' then '.0'. Anything after the numbers that isn't one is ignored,
+    so '36584,92' is 36584. Some tools write such lines; read them the same way.
+    """
+    out = []
+    for tok in tokens:
+        try:
+            float(tok)
+        except ValueError:
+            parts, rest = [], tok
+            while rest and (m := _NUMBER_PREFIX.match(rest)):
+                parts.append(m.group())
+                rest = rest[m.end() :]
+            out.extend(parts or [tok])
+        else:
+            out.append(tok)
+    return out
+
+
 # Header directives that set the starting attribute state, or map to an
 # exporter setting, rather than being carried through verbatim
 HEADER_STATE = {
@@ -302,6 +397,7 @@ HEADER_STATE = {
     "BLEND_GLASS",
     "COCKPIT_REGION",
     "GLOBAL_specular",
+    "SPECULAR",
     "GLOBAL_no_blend",
     "GLOBAL_shadow_blend",
     "GLOBAL_no_shadow",

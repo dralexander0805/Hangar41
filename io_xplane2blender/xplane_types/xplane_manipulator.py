@@ -4,7 +4,9 @@ Created on Jan 30, 2018
 @author: Ted
 """
 
+import ast
 import collections
+import copy
 import typing
 from typing import Callable, List, Optional, Tuple
 
@@ -892,6 +894,126 @@ class XPlaneManipulator:
         self.xplanePrimative = xplanePrimative
 
     def collect(self) -> None:
+        """
+        Collect manipulator attributes. returns early if an error occured
+
+        Drag rotate and detented manipulators are worked out from their
+        animations. An imported one whose animations don't fit the exporter's
+        rules (the X-Plane 11 Baron's trim wheels have none, the C172
+        seaplane's flap handle has four keyframes) is written from the values
+        in its OBJ instead, which is all X-Plane uses anyway.
+        """
+        if not (self.manip.enabled and self._imported_values_kind()):
+            self._collect_from_animations()
+            return
+
+        attributes = self.xplanePrimative.cockpitAttributes
+        before = [(name, copy.deepcopy(attr)) for name, attr in attributes.items()]
+        transports = logger.transports
+        first_new = len(logger.messages)
+        logger.transports = []
+        try:
+            self._collect_from_animations()
+        finally:
+            logger.transports = transports
+        attempt = logger.messages[first_new:]
+
+        if not any(m["type"] == "error" for m in attempt):
+            for m in attempt:  # the messages nobody saw yet
+                for transport in transports:
+                    if m["type"] in transport["types"]:
+                        transport["fn"](m["type"], m["message"], m["context"])
+            return
+
+        del logger.messages[first_new:]
+        attributes.clear()
+        attributes.update(before)
+        self._collect_imported_values()
+
+    def _imported_values_kind(self) -> Optional[str]:
+        """Which imported values this manipulator has to fall back on, if any"""
+        ob = self.xplanePrimative.blenderObject
+        if (
+            self.type in {MANIP_DRAG_ROTATE, MANIP_DRAG_ROTATE_DETENT}
+            and "xplane_imp_drag_rotate_origin" in ob
+        ):
+            return "rotate"
+        if self.type == MANIP_DRAG_AXIS_DETENT and "xplane_imp_detent_axis" in ob:
+            return "axis"
+        return None
+
+    def _collect_imported_values(self) -> None:
+        """The manipulator as its OBJ had it, moved like the mesh's vertices"""
+        ob = self.xplanePrimative.blenderObject
+        bake = self.xplanePrimative.xplaneBone.getBakeMatrixForAttached()
+
+        def point(xp) -> Vector:
+            return xplane_helpers.vec_b_to_x(bake @ xplane_helpers.vec_x_to_b(Vector(xp)))
+
+        def direction(xp) -> Vector:
+            # Not normalized: a drag axis's length is how far it drags
+            return xplane_helpers.vec_b_to_x(
+                bake.to_3x3() @ xplane_helpers.vec_x_to_b(Vector(xp))
+            )
+
+        add = self.xplanePrimative.cockpitAttributes.add
+        m = self.manip
+        if self._imported_values_kind() == "rotate":
+            add(
+                XPlaneAttribute(
+                    "ATTR_manip_" + MANIP_DRAG_ROTATE,
+                    (
+                        m.cursor,
+                        *point(ob["xplane_imp_drag_rotate_origin"]),
+                        *direction(ob["xplane_imp_drag_rotate_axis"]).normalized(),
+                        ob["xplane_imp_drag_rotate_angle1"],
+                        ob["xplane_imp_drag_rotate_angle2"],
+                        ob["xplane_imp_drag_rotate_lift_at_max"],
+                        m.v1_min,
+                        m.v1_max,
+                        m.v2_min,
+                        m.v2_max,
+                        m.dataref1,
+                        m.dataref2,
+                        m.tooltip,
+                    ),
+                )
+            )
+        else:
+            add(
+                XPlaneAttribute(
+                    "ATTR_manip_" + MANIP_DRAG_AXIS,
+                    (m.cursor, *direction((m.dx, m.dy, m.dz)), m.v1, m.v2, m.dataref1, m.tooltip),
+                )
+            )
+            add(
+                XPlaneAttribute(
+                    "ATTR_axis_detented",
+                    (
+                        *direction(ob["xplane_imp_detent_axis"]),
+                        ob["xplane_imp_detent_v1_min"],
+                        ob["xplane_imp_detent_v1_max"],
+                        ob.get("xplane_imp_detent_dataref", "none"),
+                    ),
+                )
+            )
+
+        for detent in m.axis_detent_ranges:
+            add(
+                XPlaneAttribute(
+                    "ATTR_axis_detent_range", (detent.start, detent.end, detent.height)
+                )
+            )
+        for value, degrees in ast.literal_eval(ob.get("xplane_imp_manip_keyframes", "[]")):
+            add(XPlaneAttribute("ATTR_manip_keyframe", (value, degrees)))
+        if (
+            self.type in MANIPULATORS_MOUSE_WHEEL
+            and bpy.context.scene.xplane.version >= VERSION_1050
+            and m.wheel_delta != 0
+        ):
+            add(XPlaneAttribute("ATTR_manip_wheel", m.wheel_delta))
+
+    def _collect_from_animations(self) -> None:
         """
         Collect manipulator attributes. returns early if an error occured
         """

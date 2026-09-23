@@ -22,6 +22,25 @@ def clean_tmp_folder():
             shutil.rmtree(file_object_path)
 
 
+def repo_addon_env() -> dict:
+    """
+    Environment that makes '--addons io_xplane2blender' load this checkout,
+    not whatever copy is installed in Blender's add-ons folder
+    """
+    scripts = os.path.abspath("./tests/tmp_user_scripts")
+    link = os.path.join(scripts, "addons", "io_xplane2blender")
+    if not os.path.exists(link):
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        target = os.path.abspath("./io_xplane2blender")
+        if sys.platform == "win32":
+            import _winapi
+
+            _winapi.CreateJunction(target, link)  # no admin rights needed
+        else:
+            os.symlink(target, link, target_is_directory=True)
+    return {**os.environ, "BLENDER_USER_SCRIPTS": scripts}
+
+
 def _make_argparse():
     parser = argparse.ArgumentParser(description="Runs the XPlane2Blender test suite")
     test_selection = parser.add_argument_group("Test Selection And Control")
@@ -224,7 +243,10 @@ def main(argv=None) -> int:
 
             # Run Blender, normalize output line endings because Windows is dumb
             out = subprocess.check_output(
-                blender_args, stderr=subprocess.STDOUT, universal_newlines=True
+                blender_args,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                env=repo_addon_env(),
             )  # type: str
             if not argv.force_blender_debug:
                 # Ignore the junk!
@@ -270,9 +292,10 @@ def main(argv=None) -> int:
                         int(results.group("skipped")),
                     )
                 except AttributeError as e:
-                    # For some reason, there was no results
-                    # - perhaps the no unit test was run
-                    testsRun, errors, failures, skipped = (1, 0, 0, 0)
+                    # No results: either no unit test was run, or the test
+                    # file itself crashed (say, on an import) before running any
+                    crashed = "Traceback" in out
+                    testsRun, errors, failures, skipped = (1, int(crashed), 0, 0)
 
                 total_testsCompleted += testsRun
                 total_errors += errors

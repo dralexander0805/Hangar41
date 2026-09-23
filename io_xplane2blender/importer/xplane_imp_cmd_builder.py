@@ -57,8 +57,10 @@ class ParentInfo:
 from io_xplane2blender.xplane_constants import (
     BLEND_OFF,
     BLEND_ON,
+    EMPTY_USAGE_EMITTER_PARTICLE,
     EMPTY_USAGE_MAGNET,
     LIGHT_CUSTOM,
+    LIGHT_SPILL_CUSTOM,
     LIGHT_NAMED,
     LIGHT_PARAM,
     MAX_COCKPIT_REGIONS,
@@ -73,6 +75,7 @@ from io_xplane2blender.xplane_constants import (
     COCKPIT_FEATURE_NONE,
     COCKPIT_FEATURE_PANEL,
     EXPORT_TYPE_COCKPIT,
+    EXPORT_TYPE_SCENERY,
     MANIP_AXIS_KNOB,
     MANIP_AXIS_SWITCH_LEFT_RIGHT,
     MANIP_AXIS_SWITCH_UP_DOWN,
@@ -141,8 +144,14 @@ ATTR_STATE_DIRECTIVES = frozenset(
 )
 
 
+# _current_lod while inside an ATTR_LOD that's never drawn (far <= near)
+NEVER_DRAWN_LOD = -1
+
+
 # Directives that place a light or magnet at a point in the current animation frame
-POINT_DIRECTIVES = frozenset({"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "MAGNET"})
+POINT_DIRECTIVES = frozenset(
+    {"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "LIGHT_SPILL_CUSTOM", "MAGNET", "EMITTER"}
+)
 
 
 # is_vector_axis_aligned was removed from xplane_helpers in 4.3.x — define locally.
@@ -655,6 +664,12 @@ class ImpCommandBuilder:
         self.texture: Optional[Path] = None
         self.texture_lit: Optional[Path] = None
         self.texture_normal: Optional[Path] = None
+        self.texture_draped: Optional[Path] = None
+        self.texture_draped_normal: Optional[Path] = None
+        # The .pss that EMITTERs name their particles from
+        self.particle_system: Optional[Path] = None
+        # Draped geometry only exports as Scenery
+        self.uses_draped = False
         # The file Blender can display for TEXTURE, if one exists (may be the .dds)
         self.texture_file: Optional[Path] = None
         self.is_cockpit: bool = False
@@ -698,9 +713,15 @@ class ImpCommandBuilder:
         self._meshes_with_skipped_faces = 0
         # What ATTR_reset returns shininess to (GLOBAL_specular, if any)
         self._header_shiny_rat: Optional[float] = None
+        # The header's SPECULAR, which is what draped geometry uses
+        self._draped_shiny_rat: Optional[float] = None
         # (near, far) per ATTR_LOD, and which one TRIS/lights are currently in
         self._lods: List[Tuple[float, float]] = []
         self._current_lod: Optional[int] = None
+        # TRIS and lights left out for being in an LOD that's never drawn
+        self._never_drawn = 0
+        # Meshes and lights before the first ATTR_LOD, put in the first bucket
+        self._before_first_lod = 0
 
         # Intermediate blocks refer to their parent by a key unique to this
         # import. Blender renames objects whose name is taken (e.g. by an
@@ -765,6 +786,9 @@ class ImpCommandBuilder:
             # idx error etc
             self.vt_table.idxes.extend(args)
         elif directive == "TRIS":
+            if self._current_lod == NEVER_DRAWN_LOD:
+                self._never_drawn += 1
+                return
             start_idx = args[0]
             count = args[1]
             if not self._anim_intermediate_stack:
@@ -790,6 +814,10 @@ class ImpCommandBuilder:
             )
             intermediate_datablock.manip = copy.deepcopy(self._pending_manip)
             intermediate_datablock.attrs = copy.deepcopy(self._pending_attrs)
+            if intermediate_datablock.attrs.draped and self._draped_shiny_rat is not None:
+                # Draped geometry's shininess is the header's SPECULAR
+                intermediate_datablock.attrs.shiny_rat = self._draped_shiny_rat
+                intermediate_datablock.attrs.has_explicit_shiny_rat = True
             intermediate_datablock.lod = self._current_lod
             self._blocks.append(intermediate_datablock)
             parent.children.append(intermediate_datablock)
@@ -1020,8 +1048,12 @@ class ImpCommandBuilder:
             self._add_point_block(directive, args[0], name_hint)
         elif directive == "ATTR_LOD":
             near, far = (float(v) for v in args[0][:2])
-            self._lods.append((near, far))
-            self._current_lod = len(self._lods) - 1
+            if far <= near:
+                # "ATTR_LOD 0 0" (RescueX): X-Plane never draws what's in it
+                self._current_lod = NEVER_DRAWN_LOD
+            else:
+                self._lods.append((near, far))
+                self._current_lod = len(self._lods) - 1
         else:
             assert False, f"{directive} is not supported yet"
 
@@ -1280,7 +1312,14 @@ class ImpCommandBuilder:
                                         # print("is_axis_aligned:", is_axis_aligned)
                                         # print("already_used:", already_used)
 
-                                        if is_axis_aligned and not already_used:
+                                        # The Euler it merges into must be all axis
+                                        # aligned too: an Axis Angle keeps one axis,
+                                        # so a merged rotation would be lost (the
+                                        # xPilot S76's gear rotated wrong)
+                                        into_euler = all(
+                                            is_vector_axis_aligned(vec) for vec in rotations
+                                        )
+                                        if is_axis_aligned and not already_used and into_euler:
                                             # print("merging: ", axis)
                                             in_block_animation.rotations[axis] = degrees
                                             merge_count += 1
@@ -1601,9 +1640,16 @@ class ImpCommandBuilder:
                 ob.rotation_mode = out_block.rotation_mode
                 ob.matrix_local = out_block.bake_matrix.copy()
 
-                if out_block.lod is not None and ob.type in {"MESH", "LIGHT"}:
+                lod = out_block.lod
+                if lod is None and self._lods and ob.type in {"MESH", "LIGHT"}:
+                    # Before the first ATTR_LOD, which the spec doesn't allow
+                    # (SAM's docking poles). The exporter would drop it for
+                    # being in no bucket, so it goes in the first
+                    lod = 0
+                    self._before_first_lod += 1
+                if lod is not None and ob.type in {"MESH", "LIGHT"}:
                     ob.xplane.override_lods = True
-                    ob.xplane.lod[min(out_block.lod, MAX_LODS - 2)] = True
+                    ob.xplane.lod[min(lod, MAX_LODS - 2)] = True
 
                 try:
                     out_block.transform_animation.apply_animation(ob)
@@ -1623,6 +1669,17 @@ class ImpCommandBuilder:
                 " point past the vertex table, so X-Plane doesn't draw them either"
             )
 
+        if self._before_first_lod:
+            logger.warn(
+                f"{self._before_first_lod} mesh(es)/light(s) come before the first"
+                " ATTR_LOD; they were put in the first LOD bucket"
+            )
+        if self._never_drawn:
+            logger.warn(
+                f"Left out {self._never_drawn} TRIS/light(s) in an ATTR_LOD whose far"
+                " isn't beyond its near: X-Plane never draws them"
+            )
+
         if not self.root_collection.all_objects:
             logger.warn(".obj had no real datablocks to create")
             return {"CANCELLED"}
@@ -1634,6 +1691,19 @@ class ImpCommandBuilder:
         layer = self.root_collection.xplane.layer
         if self.is_cockpit:
             layer.export_type = EXPORT_TYPE_COCKPIT
+        elif self.uses_draped:
+            # Aircraft (the default) can't have draped geometry
+            layer.export_type = EXPORT_TYPE_SCENERY
+            if self.blend_glass:
+                # KBTV's draped_objects.obj; it only means something for aircraft
+                logger.warn("BLEND_GLASS left out: it only applies to aircraft and cockpits")
+                self.blend_glass = False
+        if self.texture_draped:
+            layer.texture_draped = str(self.texture_draped)
+        if self.texture_draped_normal:
+            layer.texture_draped_normal = str(self.texture_draped_normal)
+        if self.particle_system:
+            layer.particle_system_file = str(self.particle_system)
         if self._cockpit_panel_mode:
             layer.cockpit_panel_mode = self._cockpit_panel_mode
         if self.texture:
@@ -1707,10 +1777,21 @@ class ImpCommandBuilder:
         """
         LIGHT_NAMED <name> x y z, LIGHT_PARAM <name> x y z <params...>,
         LIGHT_CUSTOM x y z r g b a s s1 t1 s2 t2 <dataref>,
-        MAGNET <debug name> <type> x y z <yaw> <pitch> <roll>.
+        MAGNET <debug name> <type> x y z <yaw> <pitch> <roll>,
+        EMITTER <name> x y z <yaw> <pitch> <roll> [index],
+        LIGHT_SPILL_CUSTOM x y z r g b a size dx dy dz width <dataref>.
         Raises ValueError/IndexError on malformed lines (the parser reports them).
         """
-        if directive == "MAGNET":
+        if directive == "EMITTER":
+            x, y, z, yaw, pitch, roll = map(float, c[1:7])
+            # Same angles as a magnet (see below)
+            rotation = Euler(
+                (math.radians(pitch), math.radians(roll), math.radians(-yaw)), "XYZ"
+            ).to_matrix().to_4x4()
+            fields = {"name": c[0], "index": int(c[7]) if len(c) > 7 else None}
+            # An empty, like a magnet
+            datablock_type = "MAGNET"
+        elif directive == "MAGNET":
             if len(c) < 8:
                 raise IndexError
             *name_parts, magnet_type = c[:-6]
@@ -1723,6 +1804,25 @@ class ImpCommandBuilder:
             datablock_type = "MAGNET"
             # Magnets only exist in cockpit objects
             self.is_cockpit = True
+        elif directive == "LIGHT_SPILL_CUSTOM":
+            x, y, z = map(float, c[0:3])
+            r, g, b, a, size, dx, dy, dz, width = map(float, c[3:12])
+            direction = vec_x_to_b((dx, dy, dz))
+            # Omni unless it points somewhere; a Spot light's -Z is its direction
+            spot = direction.length > 1e-6 and width < 1
+            rotation = (
+                Vector((0, 0, -1)).rotation_difference(direction).to_matrix().to_4x4()
+                if spot
+                else Matrix.Identity(4)
+            )
+            fields = {
+                "rgb": (r, g, b),
+                "alpha": a,
+                "size": size,
+                "width": width if spot else None,
+                "dataref": c[12] if len(c) > 12 else "none",
+            }
+            datablock_type = "LIGHT"
         elif directive == "LIGHT_CUSTOM":
             x, y, z = map(float, c[0:3])
             rgba_size_uv = [float(v) for v in c[3:12]]
@@ -1737,6 +1837,9 @@ class ImpCommandBuilder:
             rotation = Matrix.Identity(4)
             datablock_type = "LIGHT"
 
+        if self._current_lod == NEVER_DRAWN_LOD:
+            self._never_drawn += 1
+            return
         if not self._anim_intermediate_stack:
             parent = self.root_intermediate_datablock
         else:
@@ -1764,7 +1867,17 @@ class ImpCommandBuilder:
     def _create_point_object(self, block: IntermediateDatablock) -> bpy.types.Object:
         directive, fields = block.point
         name = block.name
-        if directive == "MAGNET":
+        if directive == "EMITTER":
+            ob = bpy.data.objects.new(name, None)
+            ob.empty_display_type = "SINGLE_ARROW"
+            ob.empty_display_size = 0.3
+            props = ob.xplane.special_empty_props
+            props.special_type = EMPTY_USAGE_EMITTER_PARTICLE
+            props.emitter_props.name = fields["name"]
+            if fields["index"] is not None:
+                props.emitter_props.index_enabled = True
+                props.emitter_props.index = fields["index"]
+        elif directive == "MAGNET":
             ob = bpy.data.objects.new(name, None)
             ob.empty_display_type = "ARROWS"
             ob.empty_display_size = 0.05
@@ -1774,6 +1887,23 @@ class ImpCommandBuilder:
             kinds = set(fields["type"].split("|"))
             props.magnet_props.magnet_type_is_xpad = "xpad" in kinds
             props.magnet_props.magnet_type_is_flashlight = "flashlight" in kinds
+        elif directive == "LIGHT_SPILL_CUSTOM":
+            spot = fields["width"] is not None
+            light = bpy.data.lights.new(name, "SPOT" if spot else "POINT")
+            light.xplane.type = LIGHT_SPILL_CUSTOM
+            # Override, since custom light colors may be outside 0-1
+            light.xplane.enable_rgb_override = True
+            light.xplane.rgb_override_values = fields["rgb"]
+            light.xplane.size = fields["size"]
+            light.xplane.dataref = fields["dataref"]
+            # The exporter writes WIDTH as cos(half the spot size)
+            if spot:
+                light.spot_size = max(
+                    math.radians(1), 2 * math.acos(max(0.0, min(1.0, fields["width"])))
+                )
+            # The exporter has no setting for A; it's kept for it
+            light["xplane_imp_spill_alpha"] = fields["alpha"]
+            ob = bpy.data.objects.new(name, light)
         else:
             light = bpy.data.lights.new(name, "POINT")
             # A Point light keeps the exporter from adding direction-correcting
@@ -1810,6 +1940,8 @@ class ImpCommandBuilder:
             "TEXTURE": "texture",
             "TEXTURE_LIT": "texture_lit",
             "TEXTURE_NORMAL": "texture_normal",
+            "TEXTURE_DRAPED": "texture_draped",
+            "TEXTURE_DRAPED_NORMAL": "texture_draped_normal",
         }[directive]
         setattr(self, attr, named)
         if directive == "TEXTURE":
@@ -1834,6 +1966,8 @@ class ImpCommandBuilder:
                 self.cockpit_regions.append(tuple(int(v) for v in c[:4]))
             except ValueError:
                 logger.warn(f"COCKPIT_REGION: expected 4 pixel values, got '{' '.join(c)}'")
+        elif directive == "SPECULAR":
+            self._draped_shiny_rat = number(0, 1.0)
         elif directive == "GLOBAL_specular":
             # Same as every TRIS starting with ATTR_shiny_rat <v>
             attrs.shiny_rat = number(0, 1.0)

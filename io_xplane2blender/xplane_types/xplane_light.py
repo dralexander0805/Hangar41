@@ -26,7 +26,8 @@ class _LightSpillCustomParams:
 
     @property
     def a(self):
-        return 1
+        # Always 1, except for an imported light that had another
+        return getattr(self, "alpha", 1)
 
     size: float
     dx: float
@@ -147,7 +148,7 @@ class XPlaneLight(xplane_object.XPlaneObject):
 
         # X-Plane Light Type | Light Type | parsed_light | light_param_defs | Result
         # -------------------|------------|--------------|------------------|-------
-        # LIGHT_NAMED        | *          | Yes          | Yes              | Error, "known param used as named light"
+        # LIGHT_NAMED        | *          | Yes          | Yes              | Warning, "known param used as named light", NAMED written as is
         # LIGHT_NAMED        | "POINT"    | Yes          | No               | Apply sw_callback, do not do autocorrect (POINT means OMNI)
         # LIGHT_NAMED        | not "POINT"| Yes          | No               | Apply sw_callback if possible, autocorrect
         # LIGHT_NAMED        | *          | No           | N/A              | Treat as unknown named light, Warning given, NAMED written as is, no SW callbacks applied
@@ -156,8 +157,11 @@ class XPlaneLight(xplane_object.XPlaneObject):
             and parsed_light
             and parsed_light.light_param_def
         ):
-            logger.error(
-                f"Light name {self.lightName} is a known param light, being used as a name light. Check the light name or light type"
+            # Shipped add-ons do this (X-Crafts' librain objects), so write it
+            # as is rather than make an imported OBJ unexportable
+            logger.warn(
+                f"Light name {self.lightName} is a known param light, being used as a"
+                f" name light; written as is. Check the light name or light type"
             )
             return
         elif (
@@ -174,7 +178,7 @@ class XPlaneLight(xplane_object.XPlaneObject):
         # -------------------|------------|--------------|------------------|-------
         # LIGHT_PARAM        | "POINT"    | Yes          | Yes              | Parse params, replace self.params_complete
         # LIGHT_PARAM        | not "POINT"| Yes          | Yes              | Parse params, replace self.params_complete, apply sw_callback if possible. Autocorrect with ANIM_
-        # LIGHT_PARAM        | *          | Yes          | No               | Error, "known named light used as a param light"
+        # LIGHT_PARAM        | *          | Yes          | No               | Warning, "known named light used as a param light", PARAMS written as is
         # LIGHT_PARAM        | *          | No           | N/A              | Warning given, PARAMS written as is, no auto correction_applied
         elif (
             self.lightType == LIGHT_PARAM
@@ -206,10 +210,14 @@ class XPlaneLight(xplane_object.XPlaneObject):
             self.comment = "".join(params_itr).lstrip()
 
             if len(params_actual) < len(params_formal):
-                logger.error(
+                # The bundled lights.txt predates X-Plane 12, and shipped OBJs
+                # use other definitions (X-Crafts' ERJ, KJFK), so write as is
+                logger.warn(
                     f"'{self.blenderObject.name}':Not enough actual parameters ('{' '.join(params_actual)}') to"
                     f" satisfy 'LIGHT_PARAM_DEF {len(params_formal)} {' '.join(params_formal)}'"
+                    f" in the bundled lights.txt; written as is"
                 )
+                self.comment = None
                 return
 
             if self.comment and not self.comment.startswith(("//", "#")):
@@ -220,19 +228,27 @@ class XPlaneLight(xplane_object.XPlaneObject):
             self.record_completed = parsed_light.best_overload()
             for i, (pformal, pactual) in enumerate(zip(params_formal, params_actual)):
                 try:
-                    float(pactual)
+                    value = float(pactual)
                 except ValueError:  # pactual not a float
-                    logger.error(
-                        f"Parameter {i} ({pactual}) of {self.blenderObject.name} is not a number"
-                    )
-                    return
-                else:
-                    try:
-                        self.record_completed.replace_parameterization_argument(
-                            pformal, float(pactual)
+                    # X-Plane reads the number it starts with, like strtod:
+                    # Laminar's own ships write '2850cd'
+                    prefix = re.match(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?", pactual)
+                    if not prefix:
+                        logger.error(
+                            f"Parameter {i} ({pactual}) of {self.blenderObject.name} is not a number"
                         )
-                    except ValueError:
-                        continue
+                        return
+                    value = float(prefix.group())
+                    logger.warn(
+                        f"Parameter {i} ({pactual}) of {self.blenderObject.name} isn't"
+                        f" a plain number; X-Plane reads it as {prefix.group()}"
+                    )
+                try:
+                    self.record_completed.replace_parameterization_argument(
+                        pformal, value
+                    )
+                except ValueError:
+                    continue
 
             if "DREF" in self.record_completed.prototype():
                 self.record_completed.apply_sw_callback()
@@ -253,9 +269,13 @@ class XPlaneLight(xplane_object.XPlaneObject):
                     round(dir_vec.magnitude, PRECISION_KEYFRAME) == 0.0
                     and not self.record_completed.is_omni()
                 ):
-                    logger.error(
-                        f"{self.blenderObject.name}'s '{self.lightName}' is directional, but has (0, 0, 0) for direction"
+                    # Laminar's own 747 writes airplane_generic_core with 0 0 0.
+                    # The params are written as is, there's just nothing to aim
+                    logger.warn(
+                        f"{self.blenderObject.name}'s '{self.lightName}' is directional,"
+                        f" but has (0, 0, 0) for direction; written as is"
                     )
+                    self.record_completed = None
                     return
             except ValueError:  # is_omni not ready yet
                 pass
@@ -265,11 +285,15 @@ class XPlaneLight(xplane_object.XPlaneObject):
             and parsed_light
             and not parsed_light.light_param_def
         ):
-            logger.error(
-                f"Light name {self.lightName} is a named light, not a param light."
-                f" Check the light type drop down menu"
+            # Shipped aircraft do this (the AW139's LIGHT_PARAM airplane_beacon_sp),
+            # so write it as is rather than make an imported OBJ unexportable
+            logger.warn(
+                f"Light name {self.lightName} is a named light, not a param light;"
+                f" its parameters are written as is. Check the light type drop down menu"
             )
-            return
+            if not self.blenderObject.data.xplane.params.split():
+                logger.error(f"'{self.blenderObject.name}' has an empty parameters box")
+                return
         # Even if we don't know the PARAM light, we still have to check if we're about to write out no params
         elif self.lightType == LIGHT_PARAM and not parsed_light:
             logger.warn(unknown_light_name_warning)
@@ -462,6 +486,7 @@ class XPlaneLight(xplane_object.XPlaneObject):
             p.dx, p.dy, p.dz = new_dxyz_vec_x()
             p.width = width_param_new_value()
             p.dataref = self.dataref
+            p.alpha = light_data.get("xplane_imp_spill_alpha", 1)
         # X-Plane Light Type | Light Type | parsed_light | light_param_defs | Result
         # -------------------|------------|--------------|------------------|-------
         # LIGHT_{OLD_TYPES}  | *          | N/A          | N/A              | Write

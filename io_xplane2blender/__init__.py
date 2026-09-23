@@ -47,6 +47,16 @@ if "bpy" in locals():
     importlib.reload(xplane_config)
     importlib.reload(xplane_updater)
 else:
+    import sys
+
+    # This package is being imported fresh, so any of its submodules Python
+    # still has come from an earlier copy: XPlane2Blender, which shares this
+    # module name and fails part way on Blender 4, or a Hangar41 this one
+    # replaced. Reusing them breaks enabling with "partially initialized
+    # module 'io_xplane2blender' has no attribute 'xplane_props'".
+    for _stale in [name for name in sys.modules if name.startswith(__name__ + ".")]:
+        del sys.modules[_stale]
+
     import bpy
     from . import xplane_ui
     from . import xplane_props

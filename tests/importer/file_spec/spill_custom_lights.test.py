@@ -42,4 +42,17 @@ class TestSpillCustomLights(XPlaneTestCase):
                 self.assertAlmostEqual(float(a), float(b), places=3)
 
 
+    def test_spill_custom_missing_width_left_out(self) -> None:
+        # RescueX: no WIDTH, so the dataref sits where it should be
+        bpy.ops.wm.read_homefile(use_empty=True)
+        root = Path(tempfile.mkdtemp())
+        (root / "b.obj").write_text(
+            OBJ + "LIGHT_SPILL_CUSTOM 70 1.5 0 1 0.57 0.07 0.75 1400 0.793 0 0.82 none\n"
+        )
+        self.assertEqual(
+            bpy.ops.import_scene.xplane_obj(filepath=str(root / "b.obj")), {"FINISHED"}
+        )
+        self.assertEqual(len([o for o in bpy.data.objects if o.type == "LIGHT"]), 3)
+
+
 runTestCases([TestSpillCustomLights])

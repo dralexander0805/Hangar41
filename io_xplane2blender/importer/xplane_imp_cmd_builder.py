@@ -1805,8 +1805,16 @@ class ImpCommandBuilder:
             # Magnets only exist in cockpit objects
             self.is_cockpit = True
         elif directive == "LIGHT_SPILL_CUSTOM":
-            x, y, z = map(float, c[0:3])
-            r, g, b, a, size, dx, dy, dz, width = map(float, c[3:12])
+            try:
+                x, y, z = map(float, c[0:3])
+                r, g, b, a, size, dx, dy, dz, width = map(float, c[3:12])
+            except ValueError:
+                # RescueX has one with no WIDTH; one bad light shouldn't
+                # cost the whole import
+                logger.warn(
+                    f"LIGHT_SPILL_CUSTOM with too few numbers left out: '{' '.join(c)}'"
+                )
+                return
             direction = vec_x_to_b((dx, dy, dz))
             # Omni unless it points somewhere; a Spot light's -Z is its direction
             spot = direction.length > 1e-6 and width < 1

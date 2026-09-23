@@ -68,6 +68,30 @@ class TestAviTabScreen(XPlaneTestCase):
         self.assertAlmostEqual(max(txs) - min(txs), 0.24 + 2 * 0.012, places=5)
         self.assertGreater(min(tys), 0)  # behind the screen, which faces -Y
         self.assertEqual(tablet.matrix_world, screen.matrix_world)
+        # Its glass faces the pilot, and its back faces away
+        big = sorted(tablet.data.polygons, key=lambda p: p.area)[-2:]
+        self.assertEqual(sorted(round(p.normal.y) for p in big), [-1, 1])
+        # The body is closed: no gaps round the grilles or anywhere else
+        import bmesh
+        bm = bmesh.new()
+        bm.from_mesh(tablet.data)
+        bm.faces.ensure_lookup_table()
+        body, todo = set(), [max(bm.faces, key=lambda f: f.calc_area())]
+        while todo:
+            face = todo.pop()
+            if face not in body:
+                body.add(face)
+                todo += [f for e in face.edges for f in e.link_faces]
+        open_edges = [e for f in body for e in f.edges if len(e.link_faces) != 2]
+        self.assertEqual(open_edges, [])
+        bm.free()
+
+        # Textured like the add-on's; its textures, bundled, go next to its .obj
+        self.assertIn(["TEXTURE", "avitab_tablet_space_grey.png"], tablet_lines)
+        self.assertIn(["TEXTURE_NORMAL", "avitab_tablet_NML.png"], tablet_lines)
+        self.assertIn(["NORMAL_METALNESS"], tablet_lines)
+        for name in ("avitab_tablet_space_grey.png", "avitab_tablet_NML.png"):
+            self.assertTrue((out / name).is_file())
 
         # AviTab.json
         self.assertEqual(
@@ -132,6 +156,12 @@ class TestAviTabScreen(XPlaneTestCase):
         self.assertEqual(bpy.ops.object.add_xplane_avitab_screen(), {"FINISHED"})
         found = bpy.context.active_object
         self.assertAlmostEqual(max(l.uv.x for l in found.data.uv_layers.active.data), 800 / 1024)
+        # The tablet's textures go with the cockpit's, where its .obj will be
+        self.assertTrue((aircraft / "objects" / "avitab_tablet_NML.png").is_file())
+        self.assertEqual(
+            Path(bpy.data.collections["AviTab Tablet"].xplane.layer.texture),
+            aircraft / "objects" / "avitab_tablet_space_grey.png",
+        )
 
         # A screen made for 2048, duplicated and joined, and joined with a
         # face that isn't a screen: Refit fixes only the screen faces

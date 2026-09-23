@@ -46,6 +46,8 @@ if "bpy" in locals():
     importlib.reload(xplane_ops_dev)
     importlib.reload(xplane_config)
     importlib.reload(xplane_updater)
+    importlib.reload(xplane_avitab_atlas)
+    importlib.reload(xplane_avitab_tablet)
     importlib.reload(xplane_avitab)
 else:
     import sys
@@ -67,6 +69,8 @@ else:
     from . import xplane_ops_dev
     from . import xplane_config
     from . import xplane_updater
+    from . import xplane_avitab_atlas
+    from . import xplane_avitab_tablet
     from . import xplane_avitab
 
 

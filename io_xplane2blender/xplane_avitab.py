@@ -2,7 +2,8 @@
 AviTab screens for 3D cockpits. AviTab draws into a rectangle of the panel
 texture, given in AviTab.json next to the .acf. A screen is a quad in the
 cockpit OBJ that's part of the panel and UV-mapped onto that rectangle.
-The tablet around it is its own OBJ, like the iPad in AviTab's sample.
+The tablet around it is its own OBJ, like the iPad in AviTab's sample, and
+is built in xplane_avitab_tablet.py.
 See AviTab's AircraftIntegration/readme.txt.
 """
 
@@ -17,6 +18,7 @@ import bpy
 from bpy_extras.io_utils import ExportHelper
 from mathutils import Matrix
 
+from io_xplane2blender import xplane_avitab_atlas, xplane_avitab_tablet
 from io_xplane2blender.xplane_constants import (
     ANIM_TYPE_HIDE,
     COCKPIT_FEATURE_PANEL,
@@ -154,9 +156,18 @@ class OBJECT_OT_add_xplane_avitab_screen(bpy.types.Operator):
     thickness: bpy.props.FloatProperty(
         name="Thickness",
         description="Depth of the tablet body",
-        default=0.008,
-        min=0.001,
+        default=0.007,
+        min=0.003,
         unit="LENGTH",
+    )
+    finish: bpy.props.EnumProperty(
+        name="Finish",
+        description="Colour of the tablet's aluminium",
+        items=[
+            (key, name, f"{name} anodised aluminium")
+            for key, (name, _) in xplane_avitab_atlas.FINISHES.items()
+        ],
+        default="SPACE_GREY",
     )
     hide_when_disabled: bpy.props.BoolProperty(
         name="Hide When Disabled",
@@ -187,6 +198,7 @@ class OBJECT_OT_add_xplane_avitab_screen(bpy.types.Operator):
             row = layout.row(align=True)
             row.prop(self, "bezel")
             row.prop(self, "thickness")
+            layout.prop(self, "finish")
         if (
             self.left + self.width > self.panel_width
             or self.bottom + self.height > self.panel_height
@@ -302,32 +314,29 @@ class OBJECT_OT_add_xplane_avitab_screen(bpy.types.Operator):
         return {"FINISHED"}
 
     def _add_tablet(self, context, screen, half_w, half_h):
-        """A rounded slab just behind the screen, in its own exportable collection"""
-        w = 2 * (half_w + self.bezel)
-        h = 2 * (half_h + self.bezel)
-        mesh = bpy.data.meshes.new("AviTab Tablet")
-        bm = bmesh.new()
-        bmesh.ops.create_cube(bm, size=1.0)
-        # Front face half a millimetre behind the screen, so they don't z-fight
-        front = 0.0005
-        for v in bm.verts:
-            v.co.x *= w
-            v.co.z *= h
-            v.co.y = front + (v.co.y + 0.5) * self.thickness
-        # Round the four corners: the edges that run front to back
-        corners = [e for e in bm.edges if abs(e.verts[0].co.y - e.verts[1].co.y) > 1e-6]
-        radius = min(self.bezel * 0.9, w / 4, h / 4)
-        if radius > 1e-5:
-            bmesh.ops.bevel(
-                bm, geom=corners, offset=radius, segments=4, affect="EDGES", profile=0.5
-            )
-        bm.normal_update()
-        bm.to_mesh(mesh)
-        bm.free()
+        """An iPad-like tablet just behind the screen, in its own exportable collection"""
+        mesh = xplane_avitab_tablet.build_tablet_mesh(
+            "AviTab Tablet", half_w, half_h, self.bezel, self.thickness
+        )
 
-        mat = bpy.data.materials.new("AviTab Tablet")
-        mat.diffuse_color = (0.02, 0.02, 0.025, 1)
-        mesh.materials.append(mat)
+        # Textures go where the cockpit's are, as the tablet's .obj will
+        # most likely be exported with it, or else next to the .blend
+        dest = None
+        root = _exportable_collection(context)
+        if root and root.xplane.layer.texture:
+            dest = Path(bpy.path.abspath(root.xplane.layer.texture)).parent
+        elif bpy.data.filepath:
+            dest = Path(bpy.data.filepath).parent
+        albedo, normal, copied = xplane_avitab_tablet.install_textures(dest, self.finish)
+        if not copied:
+            self.report(
+                {"INFO"},
+                f"Save the .blend so the tablet's textures can be kept next to it;"
+                " until then they're copied next to its .obj when exported",
+            )
+        mesh.materials.append(
+            xplane_avitab_tablet.make_material("AviTab Tablet", albedo, normal)
+        )
 
         coll = bpy.data.collections.new("AviTab Tablet")
         context.scene.collection.children.link(coll)
@@ -338,8 +347,12 @@ class OBJECT_OT_add_xplane_avitab_screen(bpy.types.Operator):
         while name in taken:
             n += 1
             name = f"avitab_tablet_{n}"
-        coll.xplane.layer.name = name
-        coll.xplane.layer.export_type = EXPORT_TYPE_AIRCRAFT
+        layer = coll.xplane.layer
+        layer.name = name
+        layer.export_type = EXPORT_TYPE_AIRCRAFT
+        layer.texture = str(albedo)
+        layer.texture_normal = str(normal)
+        layer.normal_metalness = True
 
         tablet = bpy.data.objects.new("AviTab Tablet", mesh)
         coll.objects.link(tablet)

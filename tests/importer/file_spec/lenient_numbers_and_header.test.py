@@ -143,6 +143,19 @@ class TestLenientNumbersAndHeader(XPlaneTestCase):
         )
         self.assertEqual(len(self.meshes()), 1)
 
+    def test_light_first_without_point_counts(self) -> None:
+        # simHeaven's seamarks: no POINT_COUNTS, and a light is the first line
+        import_obj(
+            write_obj(
+                "light_first",
+                "A\n800\nOBJ\n\nLIGHT_NAMED carrier_center_white 0 1 0\n",
+            )
+        )
+        lights = [ob for ob in bpy.data.objects if ob.type == "LIGHT"]
+        self.assertEqual(
+            [ob.data.xplane.name for ob in lights], ["carrier_center_white"]
+        )
+
     def test_garbage_still_fails(self) -> None:
         with self.assertRaises(xplane_imp_parser.UnrecoverableParserError):
             import_obj(

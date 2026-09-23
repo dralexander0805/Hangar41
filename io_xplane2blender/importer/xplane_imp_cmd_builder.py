@@ -57,6 +57,7 @@ class ParentInfo:
 from io_xplane2blender.xplane_constants import (
     BLEND_OFF,
     BLEND_ON,
+    EMPTY_USAGE_EMITTER_PARTICLE,
     EMPTY_USAGE_MAGNET,
     LIGHT_CUSTOM,
     LIGHT_NAMED,
@@ -147,7 +148,9 @@ NEVER_DRAWN_LOD = -1
 
 
 # Directives that place a light or magnet at a point in the current animation frame
-POINT_DIRECTIVES = frozenset({"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "MAGNET"})
+POINT_DIRECTIVES = frozenset(
+    {"LIGHT_NAMED", "LIGHT_PARAM", "LIGHT_CUSTOM", "MAGNET", "EMITTER"}
+)
 
 
 # is_vector_axis_aligned was removed from xplane_helpers in 4.3.x — define locally.
@@ -662,6 +665,8 @@ class ImpCommandBuilder:
         self.texture_normal: Optional[Path] = None
         self.texture_draped: Optional[Path] = None
         self.texture_draped_normal: Optional[Path] = None
+        # The .pss that EMITTERs name their particles from
+        self.particle_system: Optional[Path] = None
         # Draped geometry only exports as Scenery
         self.uses_draped = False
         # The file Blender can display for TEXTURE, if one exists (may be the .dds)
@@ -707,6 +712,8 @@ class ImpCommandBuilder:
         self._meshes_with_skipped_faces = 0
         # What ATTR_reset returns shininess to (GLOBAL_specular, if any)
         self._header_shiny_rat: Optional[float] = None
+        # The header's SPECULAR, which is what draped geometry uses
+        self._draped_shiny_rat: Optional[float] = None
         # (near, far) per ATTR_LOD, and which one TRIS/lights are currently in
         self._lods: List[Tuple[float, float]] = []
         self._current_lod: Optional[int] = None
@@ -804,6 +811,10 @@ class ImpCommandBuilder:
             )
             intermediate_datablock.manip = copy.deepcopy(self._pending_manip)
             intermediate_datablock.attrs = copy.deepcopy(self._pending_attrs)
+            if intermediate_datablock.attrs.draped and self._draped_shiny_rat is not None:
+                # Draped geometry's shininess is the header's SPECULAR
+                intermediate_datablock.attrs.shiny_rat = self._draped_shiny_rat
+                intermediate_datablock.attrs.has_explicit_shiny_rat = True
             intermediate_datablock.lod = self._current_lod
             self._blocks.append(intermediate_datablock)
             parent.children.append(intermediate_datablock)
@@ -1298,7 +1309,14 @@ class ImpCommandBuilder:
                                         # print("is_axis_aligned:", is_axis_aligned)
                                         # print("already_used:", already_used)
 
-                                        if is_axis_aligned and not already_used:
+                                        # The Euler it merges into must be all axis
+                                        # aligned too: an Axis Angle keeps one axis,
+                                        # so a merged rotation would be lost (the
+                                        # xPilot S76's gear rotated wrong)
+                                        into_euler = all(
+                                            is_vector_axis_aligned(vec) for vec in rotations
+                                        )
+                                        if is_axis_aligned and not already_used and into_euler:
                                             # print("merging: ", axis)
                                             in_block_animation.rotations[axis] = degrees
                                             merge_count += 1
@@ -1661,10 +1679,16 @@ class ImpCommandBuilder:
         elif self.uses_draped:
             # Aircraft (the default) can't have draped geometry
             layer.export_type = EXPORT_TYPE_SCENERY
+            if self.blend_glass:
+                # KBTV's draped_objects.obj; it only means something for aircraft
+                logger.warn("BLEND_GLASS left out: it only applies to aircraft and cockpits")
+                self.blend_glass = False
         if self.texture_draped:
             layer.texture_draped = str(self.texture_draped)
         if self.texture_draped_normal:
             layer.texture_draped_normal = str(self.texture_draped_normal)
+        if self.particle_system:
+            layer.particle_system_file = str(self.particle_system)
         if self._cockpit_panel_mode:
             layer.cockpit_panel_mode = self._cockpit_panel_mode
         if self.texture:
@@ -1738,10 +1762,20 @@ class ImpCommandBuilder:
         """
         LIGHT_NAMED <name> x y z, LIGHT_PARAM <name> x y z <params...>,
         LIGHT_CUSTOM x y z r g b a s s1 t1 s2 t2 <dataref>,
-        MAGNET <debug name> <type> x y z <yaw> <pitch> <roll>.
+        MAGNET <debug name> <type> x y z <yaw> <pitch> <roll>,
+        EMITTER <name> x y z <yaw> <pitch> <roll> [index].
         Raises ValueError/IndexError on malformed lines (the parser reports them).
         """
-        if directive == "MAGNET":
+        if directive == "EMITTER":
+            x, y, z, yaw, pitch, roll = map(float, c[1:7])
+            # Same angles as a magnet (see below)
+            rotation = Euler(
+                (math.radians(pitch), math.radians(roll), math.radians(-yaw)), "XYZ"
+            ).to_matrix().to_4x4()
+            fields = {"name": c[0], "index": int(c[7]) if len(c) > 7 else None}
+            # An empty, like a magnet
+            datablock_type = "MAGNET"
+        elif directive == "MAGNET":
             if len(c) < 8:
                 raise IndexError
             *name_parts, magnet_type = c[:-6]
@@ -1798,7 +1832,17 @@ class ImpCommandBuilder:
     def _create_point_object(self, block: IntermediateDatablock) -> bpy.types.Object:
         directive, fields = block.point
         name = block.name
-        if directive == "MAGNET":
+        if directive == "EMITTER":
+            ob = bpy.data.objects.new(name, None)
+            ob.empty_display_type = "SINGLE_ARROW"
+            ob.empty_display_size = 0.3
+            props = ob.xplane.special_empty_props
+            props.special_type = EMPTY_USAGE_EMITTER_PARTICLE
+            props.emitter_props.name = fields["name"]
+            if fields["index"] is not None:
+                props.emitter_props.index_enabled = True
+                props.emitter_props.index = fields["index"]
+        elif directive == "MAGNET":
             ob = bpy.data.objects.new(name, None)
             ob.empty_display_type = "ARROWS"
             ob.empty_display_size = 0.05
@@ -1870,6 +1914,8 @@ class ImpCommandBuilder:
                 self.cockpit_regions.append(tuple(int(v) for v in c[:4]))
             except ValueError:
                 logger.warn(f"COCKPIT_REGION: expected 4 pixel values, got '{' '.join(c)}'")
+        elif directive == "SPECULAR":
+            self._draped_shiny_rat = number(0, 1.0)
         elif directive == "GLOBAL_specular":
             # Same as every TRIS starting with ATTR_shiny_rat <v>
             attrs.shiny_rat = number(0, 1.0)

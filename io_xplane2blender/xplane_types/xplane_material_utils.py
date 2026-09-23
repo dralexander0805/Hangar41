@@ -247,7 +247,8 @@ def validateCockpit(mat: XPlaneMaterial) -> MaterialValidationMsgs:
 
     if mat.options.cockpit_feature == COCKPIT_FEATURE_DEVICE:
         if not any((mat.options.get(f"device_bus_{i}") for i in range(6))):
-            errors.append("Cockpit device must specify at least one bus")
+            # Carenado's S550 and Laminar's X-Plane 11 737 FMS screens use bus 0
+            warnings.append("Cockpit device doesn't specify a bus")
 
     if mat.options.cockpit_feature == COCKPIT_FEATURE_PANEL:
         errors.append("Cockpit .obj Material cannot be 'Part Of Panel'.")
@@ -264,7 +265,8 @@ def validateAircraft(mat: XPlaneMaterial) -> MaterialValidationMsgs:
 
     if mat.options.cockpit_feature == COCKPIT_FEATURE_DEVICE:
         if not any((mat.options.get(f"device_bus_{i}") for i in range(6))):
-            errors.append("Cockpit device must specify at least one bus")
+            # Carenado's S550 and Laminar's X-Plane 11 737 FMS screens use bus 0
+            warnings.append("Cockpit device doesn't specify a bus")
 
     if mat.options.cockpit_feature == COCKPIT_FEATURE_PANEL:
         errors.append("Aircraft .obj Material cannot be 'Part Of Panel'.")

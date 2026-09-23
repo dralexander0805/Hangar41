@@ -130,8 +130,13 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
         if skip:
             continue
 
-        if in_header and directive in {"VT", "IDX", "IDX10", "TRIS", "ANIM_begin", "LINES"}:
-            in_header = False  # POINT_COUNTS was missing
+        if in_header and (
+            directive in {"VT", "IDX", "IDX10", "TRIS", "ANIM_begin", "LINES", "LIGHTS"}
+            or directive in POINT_DIRECTIVES
+        ):
+            # POINT_COUNTS was missing. simHeaven's seamarks start with a
+            # LIGHT_NAMED, which was taken for a header line and lost
+            in_header = False
 
         try:
             # TODO: Rewrite using giant switch-ish table and functions so it is more neat
@@ -182,6 +187,9 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                     )
                 named, _ = _find_texture(filepath, components[1], directive)
                 builder.set_texture(directive, named, None)
+            elif directive == "PARTICLE_SYSTEM" and components:
+                # A path relative to the .obj, like a texture
+                builder.particle_system = (filepath.parent / components[0]).resolve()
             elif directive == "ATTR_draped":
                 builder.uses_draped = True
                 builder.build_cmd(directive, components)
@@ -371,6 +379,7 @@ HEADER_STATE = {
     "BLEND_GLASS",
     "COCKPIT_REGION",
     "GLOBAL_specular",
+    "SPECULAR",
     "GLOBAL_no_blend",
     "GLOBAL_shadow_blend",
     "GLOBAL_no_shadow",

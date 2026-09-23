@@ -389,42 +389,60 @@ class IntermediateDatablock:
         an object with that mesh couldn't be built
         """
         mesh_idxes = vt_table.idxes[self.start_idx : self.start_idx + self.count]
+        vt_count = len(vt_table.vertices)
 
         vertex_map_old_to_new = {}
         vertices = []
-        for idx in mesh_idxes:
-            if idx not in vertex_map_old_to_new:
-                vertices.append(vt_table.vertices[idx])
-                vertex_map_old_to_new[idx] = len(vertices) - 1
+        py_faces: List[Tuple[int, int, int]] = []
+        used_vertex_sets = set()
+        self.skipped_faces = 0
+
+        def add_vertex(idx: int) -> int:
+            vertices.append(vt_table.vertices[idx])
+            return len(vertices) - 1
+
+        for i in range(0, len(mesh_idxes) - 2, 3):
+            tri = mesh_idxes[i : i + 3]
+            if len(set(tri)) < 3 or not all(0 <= idx < vt_count for idx in tri):
+                # Degenerate (repeated index) or out of range: X-Plane draws nothing
+                self.skipped_faces += 1
+                continue
+            vertex_set = frozenset(tri)
+            if vertex_set in used_vertex_sets:
+                # Same 3 vertices as an earlier face, e.g. a double-sided panel.
+                # Blender can't store two faces on one set of vertices, so this
+                # face gets its own copies (exported as extra VTs, same look).
+                face = [add_vertex(idx) for idx in tri]
             else:
-                pass
-        idxes = [vertex_map_old_to_new[idx] for idx in mesh_idxes]
+                used_vertex_sets.add(vertex_set)
+                face = []
+                for idx in tri:
+                    if idx not in vertex_map_old_to_new:
+                        vertex_map_old_to_new[idx] = add_vertex(idx)
+                    face.append(vertex_map_old_to_new[idx])
+            # We reverse the winding order to reverse the faces
+            py_faces.append(tuple(face[::-1]))
+
+        py_vertices = [(v.x, v.y, v.z) for v in vertices]
         normals = [(v.nx, v.ny, v.nz) for v in vertices]
         uvs = [Vector((v.s, v.t)) for v in vertices]
 
-        # Thanks senderle, https://stackoverflow.com/a/22045226
-        def chunk(it, size):
-            it = iter(it)
-            return iter(lambda: tuple(itertools.islice(it, size)), ())
-
-        py_vertices = [(v.x, v.y, v.z) for v in vertices]
-        py_faces: List[Tuple[int, int, int]] = [
-            # We reverse the winding order to reverse the faces
-            face[::-1]
-            for face in chunk(idxes, 3)
-        ]
-
         me = bpy.data.meshes.new(self.name)
         me.from_pydata(py_vertices, [], py_faces)
+        # Only repairs what from_pydata couldn't take; faces were cleaned above
+        me.validate(verbose=False)
 
-        if not me.validate(verbose=True):
+        if me.polygons:
             # Thanks Dave Prue and their "Import X-Plane Object" addon for the API example
             me.uv_layers.new()
 
             for mesh_uv_loop, mesh_loop in zip(me.uv_layers[-1].data, me.loops):
                 mesh_uv_loop.uv = uvs[mesh_loop.vertex_index]
 
-            # vertex.normal is read-only in Blender 4.x; normals are computed automatically
+            # Keep the OBJ's own normals so smoothing and hard edges survive a
+            # round trip. The exporter writes split normals for smooth faces.
+            me.polygons.foreach_set("use_smooth", [True] * len(me.polygons))
+            me.normals_split_custom_set_from_vertices(normals)
             me.update(calc_edges=True)
             # 4.3.x create_datablock_mesh no longer accepts a pre-built Mesh
             # object, so create the Blender object directly.
@@ -447,7 +465,7 @@ class IntermediateDatablock:
             bpy.data.meshes.remove(me)
             logger.warn(
                 f"Skipped mesh '{self.name}' (TRIS {self.start_idx} {self.count}):"
-                " its triangles are invalid, e.g. degenerate or duplicate faces."
+                " none of its triangles are drawable (all degenerate or out of range)."
                 " The rest of the object was imported"
             )
             raise ValueError
@@ -592,6 +610,8 @@ class ImpCommandBuilder:
         self._pending_attrs: IntermediateAttributes = IntermediateAttributes()
         self._materials_by_attr_key: Dict[Tuple[Any, ...], bpy.types.Material] = {}
         self._cockpit_panel_mode: Optional[str] = None
+        self._skipped_faces = 0
+        self._meshes_with_skipped_faces = 0
         # ---------------------------------------------------------------------
 
     def build_cmd(
@@ -1416,6 +1436,9 @@ class ImpCommandBuilder:
                 except ValueError:
                     ob = None
                 else:
+                    if out_block.skipped_faces:
+                        self._skipped_faces += out_block.skipped_faces
+                        self._meshes_with_skipped_faces += 1
                     self._assign_imported_material(ob, out_block.attrs)
                     if out_block.manip:
                         self._apply_manip_to_object(ob, out_block.manip)
@@ -1449,7 +1472,14 @@ class ImpCommandBuilder:
         # end while for searching remaining blocks
         # TODO: Unit test, and what about a bunch of animations that get optimized out with not TRIS blocks?
         # Put this later
-        if not bpy.data.objects:
+        if self._skipped_faces:
+            logger.warn(
+                f"Left out {self._skipped_faces} degenerate triangle(s) in"
+                f" {self._meshes_with_skipped_faces} mesh(es): they repeat a vertex or"
+                " point past the vertex table, so X-Plane doesn't draw them either"
+            )
+
+        if not self.root_collection.all_objects:
             logger.warn(".obj had no real datablocks to create")
             return {"CANCELLED"}
 

@@ -136,6 +136,7 @@ ATTR_STATE_DIRECTIVES = frozenset(
         "ATTR_poly_os",
         "ATTR_draped",
         "ATTR_no_draped",
+        "ATTR_reset",
     }
 )
 
@@ -693,6 +694,8 @@ class ImpCommandBuilder:
         self._cockpit_panel_mode: Optional[str] = None
         self._skipped_faces = 0
         self._meshes_with_skipped_faces = 0
+        # What ATTR_reset returns shininess to (GLOBAL_specular, if any)
+        self._header_shiny_rat: Optional[float] = None
         # (near, far) per ATTR_LOD, and which one TRIS/lights are currently in
         self._lods: List[Tuple[float, float]] = []
         self._current_lod: Optional[int] = None
@@ -952,7 +955,16 @@ class ImpCommandBuilder:
                     except (IndexError, ValueError):
                         logger.warn("ATTR_manip_wheel: could not parse wheel delta")
             elif directive == "ATTR_axis_detented":
-                if self._pending_manip is not None:
+                try:
+                    zero_axis = not any(float(v) for v in c[:3])
+                except ValueError:
+                    zero_axis = False
+                if zero_axis:
+                    # No axis to lift along: a no-op some tools write. Keep the
+                    # plain manipulator; a detent type would need a location
+                    # animation the OBJ doesn't have, and fail to export.
+                    pass
+                elif self._pending_manip is not None:
                     try:
                         self._pending_manip.has_axis_detented = True
                         self._pending_manip.detent_axis = (
@@ -986,9 +998,9 @@ class ImpCommandBuilder:
                         logger.warn("ATTR_axis_detent_range: could not parse values")
             else:
                 manip_type = directive[len("ATTR_manip_"):]
-                m = self._parse_manip_components(manip_type, c)
-                if m is not None:
-                    self._pending_manip = m
+                # Clear on failure too: keeping the previous manipulator would
+                # put it on geometry it was never meant for
+                self._pending_manip = self._parse_manip_components(manip_type, c)
         elif directive in ATTR_STATE_DIRECTIVES:
             self._apply_pending_attr(directive, args[0] if args else [])
         elif directive in POINT_DIRECTIVES:
@@ -1617,7 +1629,9 @@ class ImpCommandBuilder:
             layer.texture_lit = str(self.texture_lit)
         if self.texture_normal:
             layer.texture_normal = str(self.texture_normal)
-        layer.normal_metalness = self.normal_metalness
+        # Meaningless without a normal map, and the exporter would drop it and the
+        # specular with it; without it, specular is kept as ATTR_shiny_rat
+        layer.normal_metalness = self.normal_metalness and self.texture_normal is not None
         layer.blend_glass = self.blend_glass
         self._apply_cockpit_regions(layer)
         self._apply_lods(layer)
@@ -1811,6 +1825,7 @@ class ImpCommandBuilder:
             # Same as every TRIS starting with ATTR_shiny_rat <v>
             attrs.shiny_rat = number(0, 1.0)
             attrs.has_explicit_shiny_rat = True
+            self._header_shiny_rat = attrs.shiny_rat
         elif directive in {"GLOBAL_no_blend", "GLOBAL_shadow_blend"}:
             attrs.blend = BLEND_OFF if directive == "GLOBAL_no_blend" else BLEND_SHADOW
             attrs.blend_ratio = number(0, 0.5)
@@ -1938,6 +1953,13 @@ class ImpCommandBuilder:
                 logger.warn("ATTR_shiny_rat: could not parse value")
                 return
             attrs.shiny_rat = shiny_rat
+            attrs.has_explicit_shiny_rat = True
+        elif directive == "ATTR_reset":
+            # Resets the material colors (diffuse/emission/specular, deprecated)
+            # and ATTR_shiny_rat; of those we keep only shininess
+            # Explicit, so the exporter writes it and the previous material's
+            # shininess doesn't carry over
+            attrs.shiny_rat = self._header_shiny_rat or 0.0
             attrs.has_explicit_shiny_rat = True
         elif directive == "ATTR_light_level":
             v1, v2 = number(0), number(1)
@@ -2121,6 +2143,16 @@ class ImpCommandBuilder:
 
         def tail(start: int) -> str:
             return " ".join(c[start:]) if start < len(c) else ""
+
+        # Some older tools leave out the cursor ("ATTR_manip_drag_axis 0.02 0 0 ...")
+        if manip_type != MANIP_NOOP and c:
+            try:
+                float(c[0])
+            except ValueError:
+                pass
+            else:
+                logger.warn(f"ATTR_manip_{manip_type} has no cursor; using 'hand'")
+                c = ["hand", *c]
 
         m = IntermediateManipulator(manip_type=manip_type)
         try:

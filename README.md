@@ -41,27 +41,29 @@ Importers for X-Plane objects have existed for years. They bring geometry and so
   <tr><td><b>Geometry</b></td><td>Every drawable triangle, with the object's own normals, UVs and double-sided faces.</td></tr>
   <tr><td><b>Animation</b></td><td>Translations, rotations, show/hide and keyframe loops, including nested pivots. Each part lands exactly where X-Plane puts it.</td></tr>
   <tr><td><b>Manipulators</b></td><td>Every type, including detents for flap handles, speedbrakes and gear levers.</td></tr>
-  <tr><td><b>Lights and magnets</b></td><td>Named, parameter and custom billboard lights. EFB and flashlight magnets.</td></tr>
+  <tr><td><b>Lights, magnets, particles</b></td><td>Named, parameter, custom billboard and custom spill lights. EFB and flashlight magnets. Particle emitters and their <code>.pss</code>.</td></tr>
   <tr><td><b>Materials</b></td><td>Light levels, cockpit panels and regions, blending, shadows, hard surfaces, shininess.</td></tr>
   <tr><td><b>Structure</b></td><td>LOD buckets, textures (with X-Plane's <code>.png</code> to <code>.dds</code> fallback), cockpit and aircraft settings.</td></tr>
 </table>
 
 In Blender, imports are textured in the viewport and named after what they do: `yoke_roll_ratio` and `servos_toggle`, not `Mesh.412`.
 
-## Tested on real aircraft
+## Tested on thousands of real objects
 
-28 cockpit and cabin objects from X-Plane 11 and 12 aircraft, by many different authors. Each was imported, exported and re-imported, and checked against an independent reading of the original `.obj` at three animation positions.
+Every aircraft object in a well-stocked X-Plane 11 and 12 install, plus scenery chosen to cover every OBJ command, by many different authors: 6,648 files imported without a crash. 3,706 of them were imported, exported and re-imported, with each part checked against an independent reading of the original `.obj`.
 
 <table align="center">
   <tr>
-    <td align="center"><h3>5,614</h3>parts, each within 2&nbsp;mm<br>of where X-Plane puts it</td>
-    <td align="center"><h3>930k</h3>triangles</td>
-    <td align="center"><h3>3,300+</h3>manipulators<br>kept</td>
-    <td align="center"><h3>66</h3>lights and<br>magnets kept</td>
+    <td align="center"><h3>168,369</h3>parts, each within 2&nbsp;mm<br>of where X-Plane puts it</td>
+    <td align="center"><h3>100M</h3>triangles<br>round-tripped</td>
+    <td align="center"><h3>33,842</h3>manipulators<br>kept, all of them</td>
+    <td align="center"><h3>23,000+</h3>lights and<br>magnets kept</td>
   </tr>
 </table>
 
-It isn't limited to cockpits. Whole aircraft, helicopters and scenery objects import too:
+Every one of those files with something to export exported. The few that didn't were empty placeholders, or held only old-style `LIGHTS`.
+
+Whole aircraft, helicopters and scenery all import:
 
 <p align="center">
   <img src="docs/images/showcase.jpg" alt="Eleven models imported with Hangar41 and rendered in Blender: an Airbus A330, the Boeing 737-800 flight deck, a Baron 58, a Cessna 172, a Piper Super Cub, a Stinson L-5, a Robinson R22, an airport fire truck, a hangar, the Statue of Liberty and the Eiffel Tower" width="100%">

@@ -174,7 +174,7 @@ class XPlaneLight(xplane_object.XPlaneObject):
         # -------------------|------------|--------------|------------------|-------
         # LIGHT_PARAM        | "POINT"    | Yes          | Yes              | Parse params, replace self.params_complete
         # LIGHT_PARAM        | not "POINT"| Yes          | Yes              | Parse params, replace self.params_complete, apply sw_callback if possible. Autocorrect with ANIM_
-        # LIGHT_PARAM        | *          | Yes          | No               | Error, "known named light used as a param light"
+        # LIGHT_PARAM        | *          | Yes          | No               | Warning, "known named light used as a param light", PARAMS written as is
         # LIGHT_PARAM        | *          | No           | N/A              | Warning given, PARAMS written as is, no auto correction_applied
         elif (
             self.lightType == LIGHT_PARAM
@@ -220,19 +220,27 @@ class XPlaneLight(xplane_object.XPlaneObject):
             self.record_completed = parsed_light.best_overload()
             for i, (pformal, pactual) in enumerate(zip(params_formal, params_actual)):
                 try:
-                    float(pactual)
+                    value = float(pactual)
                 except ValueError:  # pactual not a float
-                    logger.error(
-                        f"Parameter {i} ({pactual}) of {self.blenderObject.name} is not a number"
-                    )
-                    return
-                else:
-                    try:
-                        self.record_completed.replace_parameterization_argument(
-                            pformal, float(pactual)
+                    # X-Plane reads the number it starts with, like strtod:
+                    # Laminar's own ships write '2850cd'
+                    prefix = re.match(r"[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?", pactual)
+                    if not prefix:
+                        logger.error(
+                            f"Parameter {i} ({pactual}) of {self.blenderObject.name} is not a number"
                         )
-                    except ValueError:
-                        continue
+                        return
+                    value = float(prefix.group())
+                    logger.warn(
+                        f"Parameter {i} ({pactual}) of {self.blenderObject.name} isn't"
+                        f" a plain number; X-Plane reads it as {prefix.group()}"
+                    )
+                try:
+                    self.record_completed.replace_parameterization_argument(
+                        pformal, value
+                    )
+                except ValueError:
+                    continue
 
             if "DREF" in self.record_completed.prototype():
                 self.record_completed.apply_sw_callback()

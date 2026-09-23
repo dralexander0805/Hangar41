@@ -169,6 +169,22 @@ def import_obj(filepath: Union[pathlib.Path, str]) -> str:
                 if components:
                     named, found = _find_texture(filepath, components[0], directive)
                     builder.set_texture(directive, named, found)
+            elif directive == "TEXTURE_DRAPED" and components:
+                builder.uses_draped = True
+                named, _ = _find_texture(filepath, components[0], directive)
+                builder.set_texture(directive, named, None)
+            elif directive == "TEXTURE_DRAPED_NORMAL" and len(components) > 1:
+                # "TEXTURE_DRAPED_NORMAL <scale> <path>"; the exporter always writes 1.0
+                if components[0] not in {"1", "1.0"}:
+                    logger.warn(
+                        f"Line {lineno}: TEXTURE_DRAPED_NORMAL scale {components[0]}"
+                        " will be exported as 1.0"
+                    )
+                named, _ = _find_texture(filepath, components[1], directive)
+                builder.set_texture(directive, named, None)
+            elif directive == "ATTR_draped":
+                builder.uses_draped = True
+                builder.build_cmd(directive, components)
             elif directive == "POINT_COUNTS":
                 in_header = False
             elif in_header and directive in HEADER_STATE:
@@ -323,13 +339,11 @@ def _split_run_on_numbers(tokens: List[str]) -> List[str]:
     """
     X-Plane reads numbers like C's strtod: each ends where it stops parsing and
     the next starts right there, so '-0.1060-0.178' is two numbers and '-90.0.0'
-    is '-90.0' then '.0'. Some tools write such lines; split them the same way.
+    is '-90.0' then '.0'. Anything after the numbers that isn't one is ignored,
+    so '36584,92' is 36584. Some tools write such lines; read them the same way.
     """
     out = []
     for tok in tokens:
-        if not _NUMBER_CHARS.fullmatch(tok):
-            out.append(tok)
-            continue
         try:
             float(tok)
         except ValueError:
@@ -337,7 +351,7 @@ def _split_run_on_numbers(tokens: List[str]) -> List[str]:
             while rest and (m := _NUMBER_PREFIX.match(rest)):
                 parts.append(m.group())
                 rest = rest[m.end() :]
-            out.extend(parts if parts and not rest else [tok])
+            out.extend(parts or [tok])
         else:
             out.append(tok)
     return out

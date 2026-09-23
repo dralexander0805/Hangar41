@@ -73,6 +73,7 @@ from io_xplane2blender.xplane_constants import (
     COCKPIT_FEATURE_NONE,
     COCKPIT_FEATURE_PANEL,
     EXPORT_TYPE_COCKPIT,
+    EXPORT_TYPE_SCENERY,
     MANIP_AXIS_KNOB,
     MANIP_AXIS_SWITCH_LEFT_RIGHT,
     MANIP_AXIS_SWITCH_UP_DOWN,
@@ -655,6 +656,10 @@ class ImpCommandBuilder:
         self.texture: Optional[Path] = None
         self.texture_lit: Optional[Path] = None
         self.texture_normal: Optional[Path] = None
+        self.texture_draped: Optional[Path] = None
+        self.texture_draped_normal: Optional[Path] = None
+        # Draped geometry only exports as Scenery
+        self.uses_draped = False
         # The file Blender can display for TEXTURE, if one exists (may be the .dds)
         self.texture_file: Optional[Path] = None
         self.is_cockpit: bool = False
@@ -1634,6 +1639,13 @@ class ImpCommandBuilder:
         layer = self.root_collection.xplane.layer
         if self.is_cockpit:
             layer.export_type = EXPORT_TYPE_COCKPIT
+        elif self.uses_draped:
+            # Aircraft (the default) can't have draped geometry
+            layer.export_type = EXPORT_TYPE_SCENERY
+        if self.texture_draped:
+            layer.texture_draped = str(self.texture_draped)
+        if self.texture_draped_normal:
+            layer.texture_draped_normal = str(self.texture_draped_normal)
         if self._cockpit_panel_mode:
             layer.cockpit_panel_mode = self._cockpit_panel_mode
         if self.texture:
@@ -1810,6 +1822,8 @@ class ImpCommandBuilder:
             "TEXTURE": "texture",
             "TEXTURE_LIT": "texture_lit",
             "TEXTURE_NORMAL": "texture_normal",
+            "TEXTURE_DRAPED": "texture_draped",
+            "TEXTURE_DRAPED_NORMAL": "texture_draped_normal",
         }[directive]
         setattr(self, attr, named)
         if directive == "TEXTURE":

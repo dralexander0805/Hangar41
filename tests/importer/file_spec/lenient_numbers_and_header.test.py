@@ -41,6 +41,8 @@ class TestLenientNumbersAndHeader(XPlaneTestCase):
             ["-0.1060", "-0.178", "0.978"],
         )
         self.assertEqual(_split_run_on_numbers(["-90.0.0"]), ["-90.0", ".0"])
+        # What follows the number is ignored, as with strtod
+        self.assertEqual(_split_run_on_numbers(["36584,9223792524"]), ["36584"])
         # Valid numbers, datarefs and words are left alone
         self.assertEqual(
             _split_run_on_numbers(["1e-3", "sim/a[0]", "-", "abc"]),
@@ -101,6 +103,18 @@ class TestLenientNumbersAndHeader(XPlaneTestCase):
         self.assertAlmostEqual(centroid.x, 1 + 1 / 3, places=4)
         self.assertAlmostEqual(centroid.y, -3 - 1 / 3, places=4)
         self.assertAlmostEqual(centroid.z, 2, places=4)
+
+    def test_comma_decimal_in_lod(self) -> None:
+        # simHeaven's Maracana: "ATTR_LOD 0 36584,9223792524"
+        import_obj(
+            write_obj(
+                "comma_lod",
+                "I\n800\nOBJ\n\n" + BODY + "ATTR_LOD 0 36584,9223792524\nTRIS 0 3\n",
+            )
+        )
+        layer = bpy.data.collections["comma_lod"].xplane.layer
+        self.assertEqual(layer.lods, "1")
+        self.assertEqual((layer.lod[0].near, layer.lod[0].far), (0, 36584))
 
     def test_garbage_still_fails(self) -> None:
         with self.assertRaises(xplane_imp_parser.UnrecoverableParserError):

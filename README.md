@@ -36,8 +36,8 @@ Detent manipulators surviving the round-trip (flap handle):
 - **Attributes** — light levels, panel regions, blending, shadows, hard surfaces, LODs, normals
 - Blender 4.1 compatible
 
-Tested by importing, exporting and re-importing 12 cockpits that ship with X-Plane 12
-(Laminar, Aerobask, X-Aviation, Airfoillabs). Every part lands where X-Plane puts it at
+Tested by importing, exporting and re-importing 28 cockpit and cabin objects from X-Plane 12
+and X-Plane 11 aircraft by many different authors. Every part lands where X-Plane puts it at
 several animation positions, and manipulators, lights and datarefs survive the trip.
 
 ---
@@ -50,8 +50,12 @@ After an import, the Info bar (and the *Import for …* text in Blender's Text E
 
 - `LIGHT_SPILL_CUSTOM` and old-style `LIGHTS` vertex lights
 - `EMITTER` (particle emitters)
+- Pre-X-Plane 10 attributes: `ATTR_cull`/`ATTR_no_cull`, `ATTR_diffuse_rgb`, `ATTR_emission_rgb`
+- Detent ranges on a drag manipulator whose `ATTR_axis_detented` has a zero axis (the manipulator itself is kept)
 
-A few things are written differently but mean the same to X-Plane: the file header's `GLOBAL_specular` becomes per-material `ATTR_shiny_rat`, and static `ANIM_rotate`/`ANIM_trans` are baked into the geometry.
+A few things are written differently but mean the same to X-Plane: the file header's `GLOBAL_specular` becomes per-material `ATTR_shiny_rat`, static `ANIM_rotate`/`ANIM_trans` are baked into the geometry, and state on invisible click zones (`ATTR_draw_disable`) that can't affect drawing is left out.
+
+Exporting may warn that some light names are unknown: the bundled `lights.txt` predates X-Plane 12. The lights are still written exactly as they were imported.
 
 Bug reports with the offending `.obj` attached are the most useful thing you can contribute right now.
 
